@@ -1,0 +1,14 @@
+External Library / Development Log
+====================================
+
+[2026-09-02]
+
+Game specification note:
+- Keyboard movement uses WASD or the Arrow Keys.
+- The Arrow Keys may be assigned to camera-direction controls if that produces a better third-person control scheme.
+
+External libraries:
+- None added yet.
+
+Note:
+- If an external library is added later, record its name, version (when known), purpose, and source here before or together with the implementation commit.
