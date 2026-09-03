@@ -1,10 +1,12 @@
 /*
  * WASTELAND // FIELD TEST
  *
- * ゲーム本体。Three.jsは「見た目」、physics.js/Rapierは「物理状態」を担当します。
+ * ゲーム本体。Three.jsは「見た目」、physics.js/Rapierは「物理状態」、map.jsは「マップ」を担当します。
  * プレイヤーについては、見た目のモデルを直接移動させず、Rapierの速度・位置を先に更新します。
  *
- * 今回の重点:
+ * 今回は地形・岩の生成をmap.jsへ切り離しました。
+ *
+ * 重点:
  * - 人型プレイヤーを物理カプセルで支える
  * - WASD / 矢印キーを同時入力できる入力集合方式
  * - Z + W を走行として扱う
@@ -18,7 +20,8 @@
  */
 
 import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js";
-import { initPhysics, createDynamicCapsule, createFixedHeightfield, createFixedBall, RAPIER } from "./physics.js";
+import { initPhysics, createDynamicCapsule, RAPIER } from "./physics.js";
+import { buildMap } from "./map.js";
 
 const CONFIG = {
   worldSize: 180,
@@ -147,74 +150,6 @@ function createHumanoid(options = {}) {
   return group;
 }
 
-function buildTerrain() {
-  const size = CONFIG.worldSize;
-  const segments = CONFIG.terrainSegments;
-  const count = (segments + 1) ** 2;
-  const positions = new Float32Array(count * 3);
-  const heights = new Float32Array(count);
-  const indices = [];
-
-  terrainHeightAt = (x, z) => {
-    // 大きな起伏 + 細かな起伏。荒野を平面にしないための決定的な地形関数です。
-    const broad = Math.sin(x * 0.045) * 2.2 + Math.cos(z * 0.052) * 1.6;
-    const detail = Math.sin((x + z) * 0.11) * 0.65 + Math.cos((x - z) * 0.075) * 0.45;
-    const ridge = Math.max(0, Math.sin(x * 0.018 + z * 0.031)) * 1.3;
-    return broad + detail + ridge - 0.6;
-  };
-
-  for (let iz = 0; iz <= segments; iz++) {
-    for (let ix = 0; ix <= segments; ix++) {
-      const i = iz * (segments + 1) + ix;
-      const x = -size / 2 + (ix / segments) * size;
-      const z = -size / 2 + (iz / segments) * size;
-      const y = terrainHeightAt(x, z);
-      heights[i] = y;
-      positions[i * 3] = x;
-      positions[i * 3 + 1] = y;
-      positions[i * 3 + 2] = z;
-    }
-  }
-
-  for (let z = 0; z < segments; z++) {
-    for (let x = 0; x < segments; x++) {
-      const a = z * (segments + 1) + x;
-      const b = a + 1;
-      const c = a + segments + 1;
-      const d = c + 1;
-      indices.push(a, c, b, b, c, d);
-    }
-  }
-
-  const geometry = new THREE.BufferGeometry();
-  geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
-  geometry.setIndex(indices);
-  geometry.computeVertexNormals();
-  const mesh = new THREE.Mesh(geometry, makeMaterial(0x5b5747));
-  mesh.receiveShadow = true;
-  scene.add(mesh);
-
-  // 表示と物理で同じheight配列を使うことで、足元の見た目と衝突面のズレを防ぎます。
-  createFixedHeightfield({
-    rows: segments + 1,
-    cols: segments + 1,
-    heights,
-    scale: { x: size / segments, y: 1, z: size / segments }
-  });
-}
-
-function addRock(x, z, scale = 1) {
-  const y = terrainHeightAt(x, z) + 0.65 * scale;
-  const mesh = new THREE.Mesh(new THREE.DodecahedronGeometry(1, 1), makeMaterial(0x5f625e));
-  mesh.scale.set(1.25 * scale, 0.75 * scale, 0.95 * scale);
-  mesh.rotation.set(Math.random(), Math.random(), Math.random());
-  mesh.position.set(x, y, z);
-  mesh.castShadow = true;
-  mesh.receiveShadow = true;
-  scene.add(mesh);
-  createFixedBall({ x, y, z, radius: 0.95 * scale });
-}
-
 function createPlayer() {
   const physics = createDynamicCapsule({
     x: 0,
@@ -315,15 +250,15 @@ function isGrounded() {
   const velocity = playerBody.linvel();
   if (velocity.y > 1.0) return false;
 
-  // プレイヤー自身のカプセルをRayが拾わないよう、Rayの開始点を足元側へ置きます。
-  // さらにRapierのexclude collider指定を使い、自分自身を接地判定から除外します。
-  const rayOrigin = {
-    x: translation.x,
-    y: translation.y - (CONFIG.playerHalfHeight + CONFIG.playerRadius) + 0.08,
-    z: translation.z
-  };
-  const ray = new RAPIER.Ray(rayOrigin, { x: 0, y: -1, z: 0 });
-  const hit = physicsWorld.castRay(ray, CONFIG.groundProbeLength, true, undefined, undefined, playerCollider.handle);
+  const ray = new RAPIER.Ray({ x: translation.x, y: translation.y - CONFIG.playerHalfHeight, z: translation.z }, { x: 0, y: -1, z: 0 });
+  const hit = physicsWorld.castRay(
+    ray,
+    CONFIG.groundProbeLength,
+    true,
+    undefined,
+    undefined,
+    playerCollider.handle
+  );
   return hit !== null;
 }
 
@@ -332,209 +267,194 @@ function updatePlayer(dt) {
   const grounded = isGrounded();
   const running = down("KeyZ") && down("KeyW");
   const targetSpeed = running ? CONFIG.runSpeed : CONFIG.walkSpeed;
-  const targetX = move.x * targetSpeed;
-  const targetZ = move.z * targetSpeed;
+  const targetVX = move.x * targetSpeed;
+  const targetVZ = move.z * targetSpeed;
   const velocity = playerBody.linvel();
   const acceleration = grounded ? CONFIG.groundAcceleration : CONFIG.airAcceleration;
-  const braking = grounded ? CONFIG.groundBraking : CONFIG.airAcceleration;
+  const braking = grounded ? CONFIG.groundBraking : CONFIG.airAcceleration * 0.55;
 
-  // 速度差から必要な加速度を作り、質量を考慮したImpulseとしてRapierへ渡します。
-  // 位置を直接書き換えないため、衝突・重力・落下は物理エンジンが処理します。
-  const dx = targetX - velocity.x;
-  const dz = targetZ - velocity.z;
-  const limit = (move.lengthSq() > 0 ? acceleration : braking) * dt;
-  const changeX = THREE.MathUtils.clamp(dx, -limit, limit);
-  const changeZ = THREE.MathUtils.clamp(dz, -limit, limit);
-  playerBody.applyImpulse({
-    x: changeX * CONFIG.playerMass,
-    y: 0,
-    z: changeZ * CONFIG.playerMass
-  }, true);
+  const deltaVX = targetVX - velocity.x;
+  const deltaVZ = targetVZ - velocity.z;
+  const hasInput = move.lengthSq() > 0.0001;
+  const rate = hasInput ? acceleration : braking;
+  const maxChange = rate * dt;
+  const changeX = THREE.MathUtils.clamp(deltaVX, -maxChange, maxChange);
+  const changeZ = THREE.MathUtils.clamp(deltaVZ, -maxChange, maxChange);
+  playerBody.applyImpulse({ x: changeX * CONFIG.playerMass, y: 0, z: changeZ * CONFIG.playerMass }, true);
 
-  // Spaceは押しっぱなしで連続ジャンプしないよう、押下→解放の一回だけ受け付けます。
-  if (down("Space") && grounded && !jumpLatch) {
-    playerBody.applyImpulse({ x: 0, y: CONFIG.jumpSpeed * CONFIG.playerMass, z: 0 }, true);
-    jumpLatch = true;
+  const jumpDown = down("Space");
+  if (jumpDown && !jumpLatch && grounded) {
+    const jumpDelta = CONFIG.jumpSpeed - Math.max(0, velocity.y);
+    playerBody.applyImpulse({ x: 0, y: jumpDelta * CONFIG.playerMass, z: 0 }, true);
   }
-  if (!down("Space")) jumpLatch = false;
+  jumpLatch = jumpDown;
 
-  if (move.lengthSq() > 0.0001) {
-    const desiredYaw = Math.atan2(move.x, move.z);
-    playerModel.rotation.y = THREE.MathUtils.lerpAngle(playerModel.rotation.y, desiredYaw, 1 - Math.exp(-12 * dt));
+  if (hasInput) {
+    const desiredAngle = Math.atan2(move.x, move.z);
+    const currentAngle = playerModel.rotation.y;
+    playerModel.rotation.y = THREE.MathUtils.lerpAngle(currentAngle, desiredAngle, 1 - Math.exp(-12 * dt));
   }
-  animateHumanoid(playerModel, Math.hypot(velocity.x, velocity.z), dt, grounded, running);
+
+  const horizontalSpeed = Math.hypot(velocity.x, velocity.z);
+  animateHumanoid(playerModel, horizontalSpeed, grounded, running, dt);
 }
 
-function animateHumanoid(model, speed, dt, grounded, running) {
+function animateHumanoid(model, speed, grounded, running, dt) {
   const limbs = model.userData.limbs;
   const moving = speed > 0.35;
-  const frequency = running ? 11 : 8;
-  model.userData.phase += dt * frequency * (moving ? 1 : 0.15);
-  const swing = moving && grounded ? Math.sin(model.userData.phase) * (running ? 0.72 : 0.48) : 0;
-  limbs.thighL.rotation.x = swing;
-  limbs.thighR.rotation.x = -swing;
-  limbs.shinL.rotation.x = Math.max(0, -swing) * 0.45;
-  limbs.shinR.rotation.x = Math.max(0, swing) * 0.45;
-  limbs.upperArmL.rotation.x = -swing * 0.72;
-  limbs.upperArmR.rotation.x = swing * 0.72;
-  limbs.foreArmL.rotation.x = -swing * 0.22;
-  limbs.foreArmR.rotation.x = swing * 0.22;
+  const targetSwing = moving && grounded ? (running ? 0.78 : 0.5) * Math.min(speed / CONFIG.runSpeed, 1) : 0;
+  model.userData.phase += dt * (moving ? 6.0 + speed * 0.8 : 1.5);
+  const phase = model.userData.phase;
 
   if (!grounded) {
-    limbs.thighL.rotation.x = 0.16;
-    limbs.thighR.rotation.x = 0.16;
-    limbs.upperArmL.rotation.x = -0.22;
-    limbs.upperArmR.rotation.x = -0.22;
+    limbs.thighL.rotation.x = -0.18;
+    limbs.thighR.rotation.x = 0.18;
+    limbs.shinL.rotation.x = 0.15;
+    limbs.shinR.rotation.x = 0.15;
+    limbs.upperArmL.rotation.x = -0.18;
+    limbs.upperArmR.rotation.x = -0.18;
+    limbs.foreArmL.rotation.x = 0.1;
+    limbs.foreArmR.rotation.x = 0.1;
+    return;
   }
+
+  const swing = Math.sin(phase) * targetSwing;
+  const opposite = Math.sin(phase + Math.PI) * targetSwing;
+  limbs.thighL.rotation.x = swing;
+  limbs.thighR.rotation.x = opposite;
+  limbs.shinL.rotation.x = Math.max(0, -swing) * 0.5;
+  limbs.shinR.rotation.x = Math.max(0, -opposite) * 0.5;
+  limbs.upperArmL.rotation.x = opposite * 0.72;
+  limbs.upperArmR.rotation.x = swing * 0.72;
+  limbs.foreArmL.rotation.x = -opposite * 0.25;
+  limbs.foreArmR.rotation.x = -swing * 0.25;
 }
 
 function updateNPCs(dt) {
   for (const npc of npcs) {
     npc.thinkTimer -= dt;
-    const p = npc.body.translation();
-    if (npc.thinkTimer <= 0 || npc.target.distanceToSquared(new THREE.Vector3(p.x, 0, p.z)) < 2.2) {
-      npc.thinkTimer = CONFIG.npcThinkInterval + Math.random() * 0.7;
-      npc.target.set(p.x + (Math.random() - 0.5) * 22, 0, p.z + (Math.random() - 0.5) * 22);
+    const position = npc.body.translation();
+
+    if (npc.thinkTimer <= 0 || Math.hypot(position.x - npc.target.x, position.z - npc.target.z) < 1.8) {
+      npc.thinkTimer = 0.45 + Math.random() * 0.6;
+      const angle = Math.random() * Math.PI * 2;
+      const radius = 7 + Math.random() * 16;
+      npc.target.set(position.x + Math.cos(angle) * radius, 0, position.z + Math.sin(angle) * radius);
+      npc.target.x = THREE.MathUtils.clamp(npc.target.x, -CONFIG.worldSize * 0.46, CONFIG.worldSize * 0.46);
+      npc.target.z = THREE.MathUtils.clamp(npc.target.z, -CONFIG.worldSize * 0.46, CONFIG.worldSize * 0.46);
     }
-    const dx = npc.target.x - p.x;
-    const dz = npc.target.z - p.z;
-    const len = Math.hypot(dx, dz);
-    const speed = len > 1 ? npc.speed : 0;
-    const v = npc.body.linvel();
-    const desiredX = len ? dx / len * speed : 0;
-    const desiredZ = len ? dz / len * speed : 0;
-    const mass = 65;
-    const limit = 10 * dt;
-    npc.body.applyImpulse({
-      x: THREE.MathUtils.clamp(desiredX - v.x, -limit, limit) * mass,
-      y: 0,
-      z: THREE.MathUtils.clamp(desiredZ - v.z, -limit, limit) * mass
-    }, true);
-    if (speed > 0.2) {
-      npc.model.rotation.y = THREE.MathUtils.lerpAngle(npc.model.rotation.y, Math.atan2(dx, dz), 1 - Math.exp(-8 * dt));
+
+    const direction = tmpA.set(npc.target.x - position.x, 0, npc.target.z - position.z);
+    if (direction.lengthSq() > 0.01) direction.normalize();
+    const velocity = npc.body.linvel();
+    const targetVX = direction.x * npc.speed;
+    const targetVZ = direction.z * npc.speed;
+    const changeX = THREE.MathUtils.clamp(targetVX - velocity.x, -8 * dt, 8 * dt);
+    const changeZ = THREE.MathUtils.clamp(targetVZ - velocity.z, -8 * dt, 8 * dt);
+    npc.body.applyImpulse({ x: changeX * 65, y: 0, z: changeZ * 65 }, true);
+
+    if (direction.lengthSq() > 0.01) {
+      const angle = Math.atan2(direction.x, direction.z);
+      npc.model.rotation.y = THREE.MathUtils.lerpAngle(npc.model.rotation.y, angle, 1 - Math.exp(-8 * dt));
     }
-    animateHumanoid(npc.model, Math.hypot(v.x, v.z), dt, true, false);
+
+    animateHumanoid(npc.model, Math.hypot(velocity.x, velocity.z), true, false, dt);
   }
 }
 
 function updateCamera(dt) {
-  // 矢印キーは移動入力と独立してカメラにも使えます。
   if (down("ArrowLeft")) cameraYaw += CONFIG.cameraYawSpeed * dt;
   if (down("ArrowRight")) cameraYaw -= CONFIG.cameraYawSpeed * dt;
   if (down("ArrowUp")) cameraPitch += CONFIG.cameraPitchSpeed * dt;
   if (down("ArrowDown")) cameraPitch -= CONFIG.cameraPitchSpeed * dt;
   cameraPitch = THREE.MathUtils.clamp(cameraPitch, CONFIG.cameraPitchMin, CONFIG.cameraPitchMax);
 
-  const p = playerBody.translation();
-  const target = tmpA.set(p.x, p.y + CONFIG.cameraLookHeight, p.z);
+  const playerPosition = playerBody.translation();
+  const target = tmpA.set(playerPosition.x, playerPosition.y + CONFIG.cameraLookHeight, playerPosition.z);
   const horizontal = Math.cos(cameraPitch) * CONFIG.cameraDistance;
   const desired = tmpB.set(
-    p.x - Math.sin(cameraYaw) * horizontal,
-    p.y + CONFIG.cameraHeight + Math.sin(cameraPitch) * CONFIG.cameraDistance,
-    p.z + Math.cos(cameraYaw) * horizontal
+    target.x - Math.sin(cameraYaw) * horizontal,
+    target.y + Math.sin(cameraPitch) * CONFIG.cameraDistance,
+    target.z + Math.cos(cameraYaw) * horizontal
   );
 
-  const origin = { x: target.x, y: target.y, z: target.z };
-  const direction = { x: desired.x - target.x, y: desired.y - target.y, z: desired.z - target.z };
-  const length = Math.hypot(direction.x, direction.y, direction.z);
-  if (length > 0.001) {
-    direction.x /= length;
-    direction.y /= length;
-    direction.z /= length;
-    const ray = new RAPIER.Ray(origin, direction);
-    const hit = physicsWorld.castRay(ray, length, true, undefined, undefined, playerCollider.handle);
-    if (hit && hit.toi < length) {
-      const safeLength = Math.max(0.8, hit.toi - CONFIG.cameraCollisionPadding);
-      desired.set(
-        target.x + direction.x * safeLength,
-        target.y + direction.y * safeLength,
-        target.z + direction.z * safeLength
-      );
-    }
+  const origin = new RAPIER.Vector3(target.x, target.y, target.z);
+  const rayDirection = new RAPIER.Vector3(desired.x - target.x, desired.y - target.y, desired.z - target.z);
+  const distance = rayDirection.norm();
+  if (distance > 0.001) rayDirection.normalize();
+  const ray = new RAPIER.Ray(origin, rayDirection);
+  const hit = physicsWorld.castRay(ray, distance, true, undefined, undefined, playerCollider.handle);
+  if (hit) {
+    const safeDistance = Math.max(0.8, hit.toi - CONFIG.cameraCollisionPadding);
+    desired.copy(target).add(tmpC.copy(rayDirection).multiplyScalar(safeDistance));
   }
 
-  const blend = 1 - Math.exp(-CONFIG.cameraSmoothing * dt);
-  camera.position.lerp(desired, blend);
-  camera.lookAt(target);
+  camera.position.lerp(desired, 1 - Math.exp(-CONFIG.cameraSmoothing * dt));
+  camera.lookAt(target.x, target.y, target.z);
 }
 
 function updateSun(dt) {
   gameHours = (gameHours + dt * 24 / CONFIG.dayLengthSeconds) % 24;
-  const radians = (gameHours - 6) / 24 * Math.PI * 2;
-  const altitude = Math.sin(radians);
-  const azimuth = radians + Math.PI * 0.18;
-  const horizontal = Math.cos(radians);
-  const distance = 110;
+  const angle = (gameHours - 6) / 24 * Math.PI * 2;
+  const altitude = Math.sin(angle);
+  const azimuth = angle + Math.PI * 0.15;
+  const horizontal = Math.cos(angle);
+  const distance = 85;
+  const sunY = altitude * distance;
+  const sunX = Math.cos(azimuth) * horizontal * distance;
+  const sunZ = Math.sin(azimuth) * horizontal * distance;
 
-  sunMesh.position.set(
-    Math.cos(azimuth) * horizontal * distance,
-    altitude * distance + 18,
-    Math.sin(azimuth) * horizontal * distance
-  );
-  sunLight.position.copy(sunMesh.position);
+  sunLight.position.set(sunX, Math.max(4, sunY), sunZ);
   sunLight.target.position.set(0, 0, 0);
+  sunMesh.position.copy(sunLight.position);
 
-  const daylight = THREE.MathUtils.smoothstep(altitude, -0.12, 0.18);
-  sunLight.intensity = 0.04 + CONFIG.sunIntensity * daylight;
+  const daylight = THREE.MathUtils.clamp((altitude + 0.12) / 0.75, 0, 1);
+  sunLight.intensity = CONFIG.sunIntensity * (0.08 + daylight * 0.92);
   hemiLight.intensity = THREE.MathUtils.lerp(CONFIG.ambientNightIntensity, CONFIG.ambientDayIntensity, daylight);
-  scene.background.setHSL(0.56, 0.12, THREE.MathUtils.lerp(0.055, 0.61, daylight));
-  scene.fog.color.copy(scene.background);
 
-  const clockText = document.getElementById("clock");
-  const h = Math.floor(gameHours).toString().padStart(2, "0");
-  const m = Math.floor((gameHours % 1) * 60).toString().padStart(2, "0");
-  clockText.textContent = `${h}:${m}`;
-}
+  const sky = new THREE.Color().setHSL(0.56, 0.18 + daylight * 0.2, 0.18 + daylight * 0.48);
+  scene.background.copy(sky);
+  scene.fog.color.copy(sky);
 
-function syncVisuals() {
-  // ここで初めて物理結果をThree.jsへ反映します。物理→内部状態→表示の一方向です。
-  const p = playerBody.translation();
-  playerModel.position.set(p.x, p.y - 1.10, p.z);
-  for (const npc of npcs) {
-    const n = npc.body.translation();
-    npc.model.position.set(n.x, n.y - 1.02, n.z);
+  const clockElement = document.getElementById("clock");
+  if (clockElement) {
+    const hour = Math.floor(gameHours);
+    const minute = Math.floor((gameHours - hour) * 60);
+    clockElement.textContent = `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
   }
 }
 
-function onResize() {
-  camera.aspect = innerWidth / innerHeight;
-  camera.updateProjectionMatrix();
-  renderer.setSize(innerWidth, innerHeight);
+function syncVisuals() {
+  const playerPosition = playerBody.translation();
+  playerModel.position.set(playerPosition.x, playerPosition.y - 1.10, playerPosition.z);
+
+  for (const npc of npcs) {
+    const position = npc.body.translation();
+    npc.model.position.set(position.x, position.y - 1.04, position.z);
+  }
 }
 
-async function boot() {
+function showReady() {
   const loading = document.getElementById("loading");
-  const error = document.getElementById("error");
-  try {
-    physicsWorld = await initPhysics();
-    setupScene();
-    buildTerrain();
-    createPlayer();
+  const hud = document.getElementById("hud");
+  const status = document.getElementById("status");
+  if (loading) loading.hidden = true;
+  if (hud) hud.hidden = false;
+  if (status) status.textContent = "WORLD ONLINE";
+}
 
-    const rocks = [
-      [-12, -10, 1.4], [8, -16, 0.9], [21, 8, 1.6], [-26, 17, 1.1],
-      [32, -26, 1.9], [-38, -30, 1.5], [44, 22, 1.2], [-4, 29, 0.8],
-      [14, 34, 1.3], [-31, 2, 0.75], [39, -4, 0.95], [-48, 36, 1.7]
-    ];
-    rocks.forEach(([x, z, s]) => addRock(x, z, s));
-    for (let i = 0; i < CONFIG.npcCount; i++) createNPC(i);
-
-    window.addEventListener("resize", onResize);
-    loading.hidden = true;
-    document.getElementById("hud").hidden = false;
-    document.getElementById("status").textContent = "WORLD ONLINE // PLAYER PHYSICS ONLINE";
-    clock.start();
-    requestAnimationFrame(frame);
-  } catch (err) {
-    console.error(err);
-    loading.hidden = true;
-    error.hidden = false;
-    error.textContent = `WORLD INITIALIZATION FAILED\n\n${err?.stack ?? err}`;
+function showError(error) {
+  console.error(error);
+  const loading = document.getElementById("loading");
+  const errorElement = document.getElementById("error");
+  if (loading) loading.hidden = true;
+  if (errorElement) {
+    errorElement.hidden = false;
+    errorElement.textContent = `WORLD ERROR: ${error?.message ?? error}`;
   }
 }
 
 function frame() {
-  requestAnimationFrame(frame);
   const dt = Math.min(clock.getDelta(), 0.05);
   updatePlayer(dt);
   updateNPCs(dt);
@@ -543,6 +463,36 @@ function frame() {
   syncVisuals();
   updateCamera(dt);
   renderer.render(scene, camera);
+  requestAnimationFrame(frame);
+}
+
+function resize() {
+  if (!camera || !renderer) return;
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+}
+
+async function boot() {
+  try {
+    physicsWorld = await initPhysics();
+    setupScene();
+
+    // マップ生成はmap.jsに委譲。ここで返された高さ関数をプレイヤー/NPCでも共有します。
+    const map = buildMap(scene, CONFIG);
+    terrainHeightAt = map.terrainHeightAt;
+
+    createPlayer();
+    for (let i = 0; i < CONFIG.npcCount; i++) createNPC(i);
+
+    window.addEventListener("resize", resize);
+    syncVisuals();
+    showReady();
+    clock.start();
+    requestAnimationFrame(frame);
+  } catch (error) {
+    showError(error);
+  }
 }
 
 boot();
