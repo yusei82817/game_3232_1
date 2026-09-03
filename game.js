@@ -2,7 +2,7 @@
  * WASTELAND // FIELD TEST
  *
  * ゲーム本体。Three.jsは見た目、physics.js/Rapierは物理状態、map.jsはマップ、
- * npc.jsはNPC、camera.jsは三人称カメラを担当します。
+ * npc.jsはNPC、camera.jsは三人称カメラ、field.jsは時間・天候・環境を担当します。
  */
 
 import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js";
@@ -10,6 +10,7 @@ import { initPhysics, createDynamicCapsule, RAPIER } from "./physics.js";
 import { buildMap } from "./map.js";
 import { createNPCManager } from "./npc.js";
 import { createCameraController } from "./camera.js";
+import { createFieldController } from "./field.js";
 
 const CONFIG = {
   worldSize: 180,
@@ -38,8 +39,14 @@ const CONFIG = {
   cameraPitchMin: -0.38,
   cameraPitchMax: 0.72,
   cameraCollisionPadding: 0.35,
+
+  // field.jsが時間・天候サイクルを管理します。
   dayLengthSeconds: 240,
   startTimeHours: 9.5,
+  weatherCycleHours: 6,
+  weatherTransitionSeconds: 8,
+  rainCount: 700,
+
   npcCount: 14,
   npcWalkSpeed: 1.7,
   npcThinkInterval: 0.35,
@@ -51,8 +58,7 @@ const CONFIG = {
 let scene, camera, renderer, physicsWorld;
 let playerBody, playerCollider, playerModel;
 let sunLight, sunMesh, hemiLight;
-let npcManager, cameraController;
-let gameHours = CONFIG.startTimeHours;
+let npcManager, cameraController, fieldController;
 let terrainHeightAt, mapState;
 let jumpLatch = false;
 
@@ -365,45 +371,6 @@ function animateHumanoid(model, speed, grounded, running, dt, inWater = false) {
   limbs.foreArmR.rotation.x = -swing * 0.25;
 }
 
-function updateSun(dt) {
-  gameHours = (gameHours + (dt / CONFIG.dayLengthSeconds) * 24) % 24;
-  const sunAngle = (gameHours - 6) / 24 * Math.PI * 2;
-  const altitude = Math.sin(sunAngle);
-  const azimuth = sunAngle * 0.42;
-  const horizontal = Math.cos(sunAngle);
-  const distance = 95;
-  const sunY = altitude * distance;
-  const sunX = Math.cos(azimuth) * horizontal * distance;
-  const sunZ = Math.sin(azimuth) * horizontal * distance;
-
-  sunLight.position.set(sunX, Math.max(4, sunY), sunZ);
-  sunLight.target.position.set(0, 0, 0);
-  sunMesh.position.copy(sunLight.position);
-
-  const daylight = THREE.MathUtils.clamp((altitude + 0.12) / 0.75, 0, 1);
-  sunLight.intensity = CONFIG.sunIntensity * (0.08 + daylight * 0.92);
-  hemiLight.intensity = THREE.MathUtils.lerp(
-    CONFIG.ambientNightIntensity,
-    CONFIG.ambientDayIntensity,
-    daylight
-  );
-
-  const sky = new THREE.Color().setHSL(
-    0.56,
-    0.18 + daylight * 0.2,
-    0.18 + daylight * 0.48
-  );
-  scene.background.copy(sky);
-  scene.fog.color.copy(sky);
-
-  const clockElement = document.getElementById("clock");
-  if (clockElement) {
-    const hour = Math.floor(gameHours);
-    const minute = Math.floor((gameHours - hour) * 60);
-    clockElement.textContent = `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
-  }
-}
-
 function syncVisuals() {
   const playerPosition = playerBody.translation();
   playerModel.position.set(playerPosition.x, playerPosition.y - 1.10, playerPosition.z);
@@ -448,7 +415,7 @@ function frame() {
   const dt = Math.min(clock.getDelta(), 0.05);
   updatePlayer(dt);
   npcManager?.update(dt);
-  updateSun(dt);
+  fieldController?.update(dt);
   mapState?.update(dt);
   physicsWorld.step();
   syncVisuals();
@@ -469,6 +436,15 @@ async function boot() {
   try {
     physicsWorld = await initPhysics();
     setupScene();
+
+    fieldController = createFieldController({
+      scene,
+      config: CONFIG,
+      sunLight,
+      sunMesh,
+      hemiLight,
+      getPlayerPosition: () => playerBody?.translation() ?? null
+    });
 
     mapState = buildMap(scene, CONFIG);
     terrainHeightAt = mapState.terrainHeightAt;
