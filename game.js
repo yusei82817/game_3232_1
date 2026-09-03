@@ -1,11 +1,12 @@
 /*
  * WASTELAND // FIELD TEST
  *
- * ゲーム本体。Three.jsは「見た目」、physics.js/Rapierは「物理状態」、map.jsは「マップ」を担当します。
+ * ゲーム本体。Three.jsは「見た目」、physics.js/Rapierは「物理状態」、map.jsは「マップ」、npc.jsは「NPC」を担当します。
  * プレイヤーについては、見た目のモデルを直接移動させず、Rapierの速度・位置を先に更新します。
  *
  * マップ生成はmap.jsへ切り離しています。水面もmap.jsで生成しますが、
  * 水面自体には歩行用コリジョンを付けず、ここで水中状態・浮力・泳ぎを処理します。
+ * NPCの生成・AI・移動はnpc.jsへ切り離し、ここではNPCマネージャーを起動して更新を渡します。
  *
  * 重点:
  * - 人型プレイヤーを物理カプセルで支える
@@ -24,6 +25,7 @@
 import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js";
 import { initPhysics, createDynamicCapsule, RAPIER } from "./physics.js";
 import { buildMap } from "./map.js";
+import { createNPCManager } from "./npc.js";
 
 const CONFIG = {
   worldSize: 180,
@@ -63,7 +65,7 @@ const CONFIG = {
   dayLengthSeconds: 240,
   startTimeHours: 9.5,
 
-  // NPCはプレイヤーより少し軽量化しますが、人型・物理・自律行動は維持します。
+  // NPC設定本体はnpc.jsから利用します。
   npcCount: 14,
   npcWalkSpeed: 1.7,
   npcThinkInterval: 0.35,
@@ -77,6 +79,7 @@ const CONFIG = {
 let scene, camera, renderer, physicsWorld;
 let playerBody, playerCollider, playerModel;
 let sunLight, sunMesh, hemiLight;
+let npcManager;
 let gameHours = CONFIG.startTimeHours;
 let cameraYaw = Math.PI;
 let cameraPitch = 0.22;
@@ -84,7 +87,6 @@ let terrainHeightAt;
 let mapState;
 let jumpLatch = false;
 
-const npcs = [];
 const keys = new Set();
 const clock = new THREE.Clock();
 const tmpA = new THREE.Vector3();
@@ -177,38 +179,6 @@ function createPlayer() {
   scene.add(playerModel);
 }
 
-function createNPC(index) {
-  const angle = index / CONFIG.npcCount * Math.PI * 2;
-  const radius = 12 + (index % 4) * 7;
-  const x = Math.cos(angle) * radius;
-  const z = Math.sin(angle) * radius;
-  const physics = createDynamicCapsule({
-    x,
-    y: terrainHeightAt(x, z) + 2.3,
-    z,
-    radius: 0.34,
-    halfHeight: 0.68,
-    mass: 65,
-    friction: 0.82,
-    damping: 1.1
-  });
-  const model = createHumanoid({
-    shirt: new THREE.Color().setHSL((index * 0.13) % 1, 0.28, 0.38).getHex(),
-    pants: 0x30333a
-  });
-  model.scale.setScalar(0.96);
-  scene.add(model);
-  npcs.push({
-    body: physics.body,
-    collider: physics.collider,
-    model,
-    target: new THREE.Vector3(x, 0, z),
-    thinkTimer: Math.random() * CONFIG.npcThinkInterval,
-    phase: Math.random() * Math.PI * 2,
-    speed: CONFIG.npcWalkSpeed * (0.9 + Math.random() * 0.25)
-  });
-}
-
 function setupScene() {
   scene = new THREE.Scene();
   scene.background = new THREE.Color(0x9aa4a0);
@@ -287,7 +257,6 @@ function applyWaterPhysics(dt, waterInfo) {
   const position = playerBody.translation();
   const velocity = playerBody.linvel();
   const capsuleBottom = position.y - CONFIG.playerHalfHeight;
-  const capsuleTop = position.y + CONFIG.playerHalfHeight;
   const capsuleHeight = CONFIG.playerHalfHeight * 2;
   const submerged = THREE.MathUtils.clamp((waterInfo.surfaceY - capsuleBottom) / capsuleHeight, 0, 1);
 
@@ -313,11 +282,9 @@ function applyWaterPhysics(dt, waterInfo) {
   const drag = Math.max(0, 1 - 2.2 * submerged * dt);
   playerBody.setLinvel({ x: velocity.x * drag, y: playerBody.linvel().y, z: velocity.z * drag }, true);
 
-  // 頭まで沈んでいる場合は、地上と同じ視点ではなく少し低い姿勢にします。
   playerModel.userData.inWater = true;
   playerModel.userData.submerged = submerged;
   playerModel.userData.waterSurfaceY = waterInfo.surfaceY;
-  void capsuleTop;
 }
 
 function playerMassSafe() {
@@ -354,9 +321,7 @@ function updatePlayer(dt) {
   }
   jumpLatch = jumpDown;
 
-  if (inWater) {
-    applyWaterPhysics(dt, waterInfo);
-  }
+  if (inWater) applyWaterPhysics(dt, waterInfo);
 
   if (hasInput) {
     const desiredAngle = Math.atan2(move.x, move.z);
@@ -413,46 +378,6 @@ function animateHumanoid(model, speed, grounded, running, dt, inWater = false) {
   limbs.upperArmR.rotation.x = swing * 0.72;
   limbs.foreArmL.rotation.x = -opposite * 0.25;
   limbs.foreArmR.rotation.x = -swing * 0.25;
-}
-
-function updateNPCs(dt) {
-  for (const npc of npcs) {
-    npc.thinkTimer -= dt;
-    const position = npc.body.translation();
-
-    if (npc.thinkTimer <= 0 || Math.hypot(position.x - npc.target.x, position.z - npc.target.z) < 1.8) {
-      npc.thinkTimer = 0.45 + Math.random() * 0.6;
-      let targetFound = false;
-
-      // NPCは湖へ不用意に入り込まず、岸周辺を歩くようにします。
-      for (let attempt = 0; attempt < 8 && !targetFound; attempt++) {
-        const angle = Math.random() * Math.PI * 2;
-        const radius = 7 + Math.random() * 16;
-        const x = THREE.MathUtils.clamp(position.x + Math.cos(angle) * radius, -CONFIG.worldSize * 0.46, CONFIG.worldSize * 0.46);
-        const z = THREE.MathUtils.clamp(position.z + Math.sin(angle) * radius, -CONFIG.worldSize * 0.46, CONFIG.worldSize * 0.46);
-        if (!mapState?.isWaterAt(x, z)) {
-          npc.target.set(x, 0, z);
-          targetFound = true;
-        }
-      }
-    }
-
-    const direction = tmpA.set(npc.target.x - position.x, 0, npc.target.z - position.z);
-    if (direction.lengthSq() > 0.01) direction.normalize();
-    const velocity = npc.body.linvel();
-    const targetVX = direction.x * npc.speed;
-    const targetVZ = direction.z * npc.speed;
-    const changeX = THREE.MathUtils.clamp(targetVX - velocity.x, -8 * dt, 8 * dt);
-    const changeZ = THREE.MathUtils.clamp(targetVZ - velocity.z, -8 * dt, 8 * dt);
-    npc.body.applyImpulse({ x: changeX * 65, y: 0, z: changeZ * 65 }, true);
-
-    if (direction.lengthSq() > 0.01) {
-      const angle = Math.atan2(direction.x, direction.z);
-      npc.model.rotation.y = THREE.MathUtils.lerpAngle(npc.model.rotation.y, angle, 1 - Math.exp(-8 * dt));
-    }
-
-    animateHumanoid(npc.model, Math.hypot(velocity.x, velocity.z), true, false, dt, false);
-  }
 }
 
 function updateCamera(dt) {
@@ -520,11 +445,7 @@ function updateSun(dt) {
 function syncVisuals() {
   const playerPosition = playerBody.translation();
   playerModel.position.set(playerPosition.x, playerPosition.y - 1.10, playerPosition.z);
-
-  for (const npc of npcs) {
-    const position = npc.body.translation();
-    npc.model.position.set(position.x, position.y - 1.04, position.z);
-  }
+  npcManager?.syncVisuals();
 }
 
 function updateWaterHud() {
@@ -564,7 +485,7 @@ function showError(error) {
 function frame() {
   const dt = Math.min(clock.getDelta(), 0.05);
   updatePlayer(dt);
-  updateNPCs(dt);
+  npcManager?.update(dt);
   updateSun(dt);
   mapState?.update(dt);
   physicsWorld.step();
@@ -592,7 +513,17 @@ async function boot() {
     terrainHeightAt = mapState.terrainHeightAt;
 
     createPlayer();
-    for (let i = 0; i < CONFIG.npcCount; i++) createNPC(i);
+
+    // NPCの生成・更新はnpc.jsのManagerへ委譲します。
+    npcManager = createNPCManager({
+      scene,
+      config: CONFIG,
+      terrainHeightAt,
+      mapState,
+      createModel: createHumanoid,
+      animateModel: animateHumanoid
+    });
+    npcManager.createAll();
 
     window.addEventListener("resize", resize);
     syncVisuals();
