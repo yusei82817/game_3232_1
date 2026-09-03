@@ -24,10 +24,13 @@ External libraries:
   Source: https://cdn.jsdelivr.net/npm/@dimforge/rapier3d-compat@0.19.0/+esm
 
 Implementation notes:
-- physics.js owns the Rapier world/body/collider helpers.
-- game.js owns Three.js, input, game loop, camera and player behavior.
+- physics.js owns the Rapier physics world/body/collider helpers.
+- game.js owns Three.js, input, game loop and overall system coordination.
 - map.js owns terrain, natural objects and water-related map data.
 - npc.js owns NPC generation, wandering AI, movement, animation and visual synchronization.
+- player.js owns player generation, movement, grounding, jumping, water physics, player animation and visual synchronization.
+- camera.js owns the third-person camera.
+- field.js owns time, weather and environmental lighting.
 - Player and NPC positions are read from Rapier after each physics step before updating Three.js models.
 - Player movement uses impulses derived from velocity error rather than directly teleporting the physics body.
 - Player grounding ray excludes the player's own collider to avoid false grounded states.
@@ -60,7 +63,7 @@ Commits:
 - 水中でSpaceを押すと上向きに泳げるようにし、通常の陸上ジャンプとは別処理にした。
 - 水中用の手足アニメーションを追加。
 - HUDに浅瀬・遊泳状態と水深を表示する処理を追加。
-- NPCは湖へ不用意に入り込まないよう、移動先の選択時に水域を避けるよう変更。
+- NPCは湖へ不用意に入り込まないよう、移動先の選択時に水域を避けるようにした。
 - 外部ライブラリの追加はなし。
 
 [2026-09-03 / NPC処理分離]
@@ -85,3 +88,12 @@ Commits:
 - 歩行アニメーションを共通の人型アニメーション処理へ接続し、物理速度と見た目の歩行を同期。
 - game.jsからNPCへRapierの物理ワールドとプレイヤーの物理ボディを共有し、NPC側で周囲の物理状況を判断できるようにした。
 - 外部ライブラリの追加はなし。
+
+[2026-09-04 / プレイヤー処理分離]
+- 匿名JoJoさんの提案により、game.jsに集中していたプレイヤー処理をplayer.jsへ分離。
+- player.jsへプレイヤーの生成、カメラ基準の移動入力、地面判定、ジャンプ、陸上の加速・減速、水中移動、浮力、水中抵抗、プレイヤーアニメーション、表示位置同期を移動。
+- game.jsはプレイヤーの物理Bodyやモデルを直接保持せず、playerControllerを通して必要な情報だけを取得する構成へ変更。
+- player.jsはcamera.jsへ直接依存せず、現在のカメラYawだけを関数経由で受け取る方式にした。これによりモジュール間の依存関係を増やしていない。
+- NPCが利用する共通人型アニメーションもplayer.jsから公開し、game.jsはモデル生成処理と各システムの接続に集中する構成とした。
+- 物理位置は引き続きRapierを正とし、physicsWorld.step()後にplayer.jsがThree.jsモデルへ位置を同期する方式を維持。
+- プレイヤー処理分離に伴う外部ライブラリの追加はなし。
