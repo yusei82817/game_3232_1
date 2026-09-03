@@ -17,8 +17,8 @@ const tmpMove = new THREE.Vector3();
  * プレイヤーを生成・更新するコントローラー。
  *
  * createModelはgame.js側の共通人型モデル生成関数を受け取ります。
- * これによりNPCとプレイヤーで同じ人型モデルを使いながら、
- * プレイヤー固有の物理・操作処理だけをplayer.jsへ分離できます。
+ * getCameraYawはカメラ側の現在のYawだけを受け取り、player.jsから
+ * camera.jsへ直接依存しない構成にしています。
  */
 export function createPlayerController({
   scene,
@@ -27,7 +27,7 @@ export function createPlayerController({
   terrainHeightAt,
   mapState,
   createModel,
-  cameraController,
+  getCameraYaw,
   isDown
 }) {
   let playerBody = null;
@@ -36,7 +36,7 @@ export function createPlayerController({
   let jumpLatch = false;
 
   function movementInput() {
-    const cameraYaw = cameraController?.getYaw() ?? Math.PI;
+    const cameraYaw = getCameraYaw?.() ?? Math.PI;
     const forward = tmpForward.set(Math.sin(cameraYaw), 0, -Math.cos(cameraYaw));
     const right = tmpRight.set(Math.cos(cameraYaw), 0, Math.sin(cameraYaw));
     const move = tmpMove.set(0, 0, 0);
@@ -85,7 +85,12 @@ export function createPlayerController({
   }
 
   function applyWaterPhysics(dt, waterInfo) {
-    if (!waterInfo.isWater) return;
+    if (!waterInfo.isWater) {
+      playerModel.userData.inWater = false;
+      playerModel.userData.submerged = 0;
+      playerModel.userData.waterSurfaceY = waterInfo.surfaceY ?? 0;
+      return;
+    }
 
     const position = playerBody.translation();
     const velocity = playerBody.linvel();
@@ -97,7 +102,12 @@ export function createPlayerController({
       1
     );
 
-    if (submerged <= 0) return;
+    if (submerged <= 0) {
+      playerModel.userData.inWater = false;
+      playerModel.userData.submerged = 0;
+      playerModel.userData.waterSurfaceY = waterInfo.surfaceY;
+      return;
+    }
 
     // 浮力は水中に入っているカプセルの割合に応じて増減させます。
     const buoyancyImpulse = config.playerMass * 9.81 * config.waterBuoyancy * submerged * dt;
@@ -180,14 +190,15 @@ export function createPlayerController({
 
     applyWaterPhysics(dt, waterInfo);
 
-    // アニメーションには直前の物理速度を使い、物理状態そのものは変更しません。
+    // アニメーションには物理速度を使い、見た目の処理から物理位置を直接変更しません。
     animateHumanoid(
       playerModel,
       Math.hypot(velocity.x, velocity.z),
       grounded,
       running,
       dt,
-      inWater
+      inWater,
+      config
     );
   }
 
@@ -237,7 +248,6 @@ export function animateHumanoid(model, speed, grounded, running, dt, inWater = f
   const limbs = model?.userData?.limbs;
   if (!limbs) return;
 
-  // NPCからも利用されるため、速度上限はconfigが無くても安全な既定値を使用します。
   const runSpeed = config?.runSpeed ?? 7.4;
   const walkSpeed = config?.walkSpeed ?? 4.0;
 
