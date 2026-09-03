@@ -1,9 +1,9 @@
 /*
  * WASTELAND // FIELD TEST
  *
- * ゲーム全体の初期化・入力・描画ループを担当します。
+ * ゲーム全体の初期化と描画ループ、各システムの接続を担当します。
  * physics.jsは物理、map.jsはマップ、npc.jsはNPC、camera.jsはカメラ、
- * field.jsは時間・天候・環境、player.jsはプレイヤー固有処理を担当します。
+ * field.jsは時間・天候・環境、player.jsはプレイヤー、input.jsは入力を担当します。
  */
 
 import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js";
@@ -13,6 +13,7 @@ import { createNPCManager } from "./npc.js";
 import { createCameraController } from "./camera.js";
 import { createFieldController } from "./field.js";
 import { createPlayerController, animateHumanoid } from "./player.js";
+import { createInputController } from "./input.js";
 
 const CONFIG = {
   worldSize: 180,
@@ -42,7 +43,6 @@ const CONFIG = {
   cameraPitchMax: 0.72,
   cameraCollisionPadding: 0.35,
 
-  // field.jsが時間・天候サイクルを管理します。
   dayLengthSeconds: 240,
   startTimeHours: 9.5,
   weatherCycleHours: 6,
@@ -62,22 +62,8 @@ let sunLight, sunMesh, hemiLight;
 let npcManager, cameraController, fieldController, playerController;
 let terrainHeightAt, mapState;
 
-const keys = new Set();
+const inputController = createInputController();
 const clock = new THREE.Clock();
-
-// キー入力はgame.jsが一括管理し、各モジュールには必要な状態だけを渡します。
-window.addEventListener("keydown", (event) => {
-  keys.add(event.code);
-  if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Space"].includes(event.code)) {
-    event.preventDefault();
-  }
-});
-window.addEventListener("keyup", (event) => keys.delete(event.code));
-window.addEventListener("blur", () => keys.clear());
-
-function down(...codes) {
-  return codes.some((code) => keys.has(code));
-}
 
 function makeMaterial(color, roughness = 0.86) {
   return new THREE.MeshStandardMaterial({ color, roughness, metalness: 0.04 });
@@ -178,7 +164,6 @@ function setupScene() {
 }
 
 function syncVisuals() {
-  // 物理ステップ後のRapier位置を各表示オブジェクトへ反映します。
   playerController?.syncVisual();
   npcManager?.syncVisuals();
 }
@@ -221,7 +206,6 @@ function showError(error) {
 function frame() {
   const dt = Math.min(clock.getDelta(), 0.05);
 
-  // 物理・AI・環境を更新してからRapierを進め、最後に表示を同期します。
   playerController?.update(dt);
   npcManager?.update(dt);
   fieldController?.update(dt);
@@ -258,7 +242,6 @@ async function boot() {
     mapState = buildMap(scene, CONFIG);
     terrainHeightAt = mapState.terrainHeightAt;
 
-    // 先にプレイヤー物理Bodyを作り、カメラが参照できる状態にします。
     playerController = createPlayerController({
       scene,
       config: CONFIG,
@@ -267,7 +250,7 @@ async function boot() {
       mapState,
       createModel: createHumanoid,
       getCameraYaw: () => cameraController?.getYaw() ?? Math.PI,
-      isDown: down
+      isDown: inputController.isDown
     });
     playerController.create();
 
@@ -277,7 +260,7 @@ async function boot() {
       physicsWorld,
       playerBody: playerController.getBody(),
       playerCollider: playerController.getCollider(),
-      isDown: down
+      isDown: inputController.isDown
     });
 
     npcManager = createNPCManager({
