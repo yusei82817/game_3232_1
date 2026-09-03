@@ -1,37 +1,19 @@
 /*
  * WASTELAND // FIELD TEST
  *
- * ゲーム本体。Three.jsは「見た目」、physics.js/Rapierは「物理状態」、map.jsは「マップ」、npc.jsは「NPC」を担当します。
- * プレイヤーについては、見た目のモデルを直接移動させず、Rapierの速度・位置を先に更新します。
- *
- * マップ生成はmap.jsへ切り離しています。水面もmap.jsで生成しますが、
- * 水面自体には歩行用コリジョンを付けず、ここで水中状態・浮力・泳ぎを処理します。
- * NPCの生成・AI・移動はnpc.jsへ切り離し、ここではNPCマネージャーを起動して更新を渡します。
- *
- * 重点:
- * - 人型プレイヤーを物理カプセルで支える
- * - WASD / 矢印キーを同時入力できる入力集合方式
- * - Z + W を走行として扱う
- * - 加速・減速を物理的な速度変化として処理
- * - ジャンプと接地判定
- * - 坂・段差を含む地形上での移動
- * - 三人称カメラの追従、回転、地形へのめり込み防止
- * - 歩行・走行・待機・水泳に応じた人型アニメーション
- * - 水中では浮力を物理状態へ加え、陸上と異なる移動速度にする
- *
- * ブラウザだけで動かすため、外部3Dモデルは使わずThree.jsで人型を生成します。
+ * ゲーム本体。Three.jsは見た目、physics.js/Rapierは物理状態、map.jsはマップ、
+ * npc.jsはNPC、camera.jsは三人称カメラを担当します。
  */
 
 import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js";
 import { initPhysics, createDynamicCapsule, RAPIER } from "./physics.js";
 import { buildMap } from "./map.js";
 import { createNPCManager } from "./npc.js";
+import { createCameraController } from "./camera.js";
 
 const CONFIG = {
   worldSize: 180,
   terrainSegments: 64,
-
-  // プレイヤーの物理寸法。Rapierのカプセルと人型モデルの身長を近づけます。
   playerRadius: 0.38,
   playerHalfHeight: 0.72,
   playerMass: 72,
@@ -42,15 +24,11 @@ const CONFIG = {
   airAcceleration: 6.0,
   jumpSpeed: 5.8,
   groundProbeLength: 1.24,
-
-  // 水中の移動設定。水中では陸上より水平速度を落とし、Spaceで上向きに泳ぎます。
   swimSpeed: 2.6,
   swimAcceleration: 8.5,
   swimBraking: 5.5,
   swimUpSpeed: 3.2,
   waterBuoyancy: 1.18,
-
-  // カメラ。distance/heightを調整すると三人称視点の距離と高さを変更できます。
   cameraDistance: 6.4,
   cameraHeight: 2.9,
   cameraLookHeight: 1.15,
@@ -60,17 +38,11 @@ const CONFIG = {
   cameraPitchMin: -0.38,
   cameraPitchMax: 0.72,
   cameraCollisionPadding: 0.35,
-
-  // 1実秒で進むゲーム内時間。240秒で24時間を一周します。
   dayLengthSeconds: 240,
   startTimeHours: 9.5,
-
-  // NPC設定本体はnpc.jsから利用します。
   npcCount: 14,
   npcWalkSpeed: 1.7,
   npcThinkInterval: 0.35,
-
-  // 太陽・環境光。太陽高度と光量を同じ時刻計算から決定します。
   sunIntensity: 3.0,
   ambientDayIntensity: 0.55,
   ambientNightIntensity: 0.12
@@ -79,12 +51,9 @@ const CONFIG = {
 let scene, camera, renderer, physicsWorld;
 let playerBody, playerCollider, playerModel;
 let sunLight, sunMesh, hemiLight;
-let npcManager;
+let npcManager, cameraController;
 let gameHours = CONFIG.startTimeHours;
-let cameraYaw = Math.PI;
-let cameraPitch = 0.22;
-let terrainHeightAt;
-let mapState;
+let terrainHeightAt, mapState;
 let jumpLatch = false;
 
 const keys = new Set();
@@ -93,7 +62,6 @@ const tmpA = new THREE.Vector3();
 const tmpB = new THREE.Vector3();
 const tmpC = new THREE.Vector3();
 
-// キーは「現在押されている集合」で保持します。これによりZ+W+Aなども同時に認識できます。
 window.addEventListener("keydown", (event) => {
   keys.add(event.code);
   if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Space"].includes(event.code)) {
@@ -112,7 +80,6 @@ function makeMaterial(color, roughness = 0.86) {
 }
 
 function createHumanoid(options = {}) {
-  // 人型を複数の部位と関節Pivotに分けます。アニメーションはPivotを回して作ります。
   const group = new THREE.Group();
   const skin = makeMaterial(options.skin ?? 0xb98468);
   const shirt = makeMaterial(options.shirt ?? 0x536a78);
@@ -157,7 +124,10 @@ function createHumanoid(options = {}) {
   footR.position.x = 0.19;
   group.add(footR);
 
-  group.userData.limbs = { upperArmL, upperArmR, foreArmL, foreArmR, thighL, thighR, shinL, shinR };
+  group.userData.limbs = {
+    upperArmL, upperArmR, foreArmL, foreArmR,
+    thighL, thighR, shinL, shinR
+  };
   group.userData.phase = Math.random() * Math.PI * 2;
   return group;
 }
@@ -208,12 +178,15 @@ function setupScene() {
   sunLight.shadow.camera.bottom = -55;
   scene.add(sunLight);
   scene.add(sunLight.target);
-  sunMesh = new THREE.Mesh(new THREE.SphereGeometry(2.2, 16, 12), new THREE.MeshBasicMaterial({ color: 0xffe6a3 }));
+  sunMesh = new THREE.Mesh(
+    new THREE.SphereGeometry(2.2, 16, 12),
+    new THREE.MeshBasicMaterial({ color: 0xffe6a3 })
+  );
   scene.add(sunMesh);
 }
 
 function movementInput() {
-  // W/Sはカメラ基準の前後、A/Dはカメラ基準の左右です。
+  const cameraYaw = cameraController?.getYaw() ?? Math.PI;
   const forward = tmpA.set(Math.sin(cameraYaw), 0, -Math.cos(cameraYaw));
   const right = tmpB.set(Math.cos(cameraYaw), 0, Math.sin(cameraYaw));
   const move = tmpC.set(0, 0, 0);
@@ -246,9 +219,15 @@ function isGrounded() {
 }
 
 function getPlayerWaterInfo() {
-  if (!mapState || !playerBody) return { isWater: false, surfaceY: 0, depth: 0, shoreFactor: 0 };
+  if (!mapState || !playerBody) {
+    return { isWater: false, surfaceY: 0, depth: 0, shoreFactor: 0 };
+  }
   const position = playerBody.translation();
   return mapState.getWaterInfoAt(position.x, position.z);
+}
+
+function playerMassSafe() {
+  return Math.max(1, CONFIG.playerMass);
 }
 
 function applyWaterPhysics(dt, waterInfo) {
@@ -258,37 +237,45 @@ function applyWaterPhysics(dt, waterInfo) {
   const velocity = playerBody.linvel();
   const capsuleBottom = position.y - CONFIG.playerHalfHeight;
   const capsuleHeight = CONFIG.playerHalfHeight * 2;
-  const submerged = THREE.MathUtils.clamp((waterInfo.surfaceY - capsuleBottom) / capsuleHeight, 0, 1);
+  const submerged = THREE.MathUtils.clamp(
+    (waterInfo.surfaceY - capsuleBottom) / capsuleHeight,
+    0,
+    1
+  );
 
   if (submerged <= 0) return;
 
-  // 重力に対抗する浮力を深さに応じて加えます。完全に沈んだ状態ではほぼ体重分を支えます。
   const buoyancyImpulse = CONFIG.playerMass * 9.81 * CONFIG.waterBuoyancy * submerged * dt;
   playerBody.applyImpulse({ x: 0, y: buoyancyImpulse, z: 0 }, true);
 
-  // 水面付近で落下速度が大きくなりすぎないよう、水の抵抗を表現します。
   if (velocity.y < -1.8) {
-    playerBody.setLinvel({ x: velocity.x, y: velocity.y * 0.72, z: velocity.z }, true);
+    playerBody.setLinvel({
+      x: velocity.x,
+      y: velocity.y * 0.72,
+      z: velocity.z
+    }, true);
   }
 
-  // Spaceを押している間は上向きの泳ぎを行います。陸上のジャンプとは別処理です。
   if (down("Space")) {
     const verticalDelta = CONFIG.swimUpSpeed - velocity.y;
     const change = THREE.MathUtils.clamp(verticalDelta, -2.0, 2.0) * dt;
-    playerBody.applyImpulse({ x: 0, y: change * playerMassSafe(), z: 0 }, true);
+    playerBody.applyImpulse({
+      x: 0,
+      y: change * playerMassSafe(),
+      z: 0
+    }, true);
   }
 
-  // 水中では水平速度にも抵抗を掛けます。
   const drag = Math.max(0, 1 - 2.2 * submerged * dt);
-  playerBody.setLinvel({ x: velocity.x * drag, y: playerBody.linvel().y, z: velocity.z * drag }, true);
+  playerBody.setLinvel({
+    x: velocity.x * drag,
+    y: playerBody.linvel().y,
+    z: velocity.z * drag
+  }, true);
 
   playerModel.userData.inWater = true;
   playerModel.userData.submerged = submerged;
   playerModel.userData.waterSurfaceY = waterInfo.surfaceY;
-}
-
-function playerMassSafe() {
-  return Math.max(1, CONFIG.playerMass);
 }
 
 function updatePlayer(dt) {
@@ -298,29 +285,41 @@ function updatePlayer(dt) {
   const grounded = isGrounded() && !inWater;
   const running = down("KeyZ") && down("KeyW") && !inWater;
 
-  const targetSpeed = inWater ? CONFIG.swimSpeed : (running ? CONFIG.runSpeed : CONFIG.walkSpeed);
+  const targetSpeed = inWater
+    ? CONFIG.swimSpeed
+    : (running ? CONFIG.runSpeed : CONFIG.walkSpeed);
   const targetVX = move.x * targetSpeed;
   const targetVZ = move.z * targetSpeed;
   const velocity = playerBody.linvel();
 
-  const acceleration = inWater ? CONFIG.swimAcceleration : (grounded ? CONFIG.groundAcceleration : CONFIG.airAcceleration);
+  const acceleration = inWater
+    ? CONFIG.swimAcceleration
+    : (grounded ? CONFIG.groundAcceleration : CONFIG.airAcceleration);
   const braking = inWater ? CONFIG.swimBraking : CONFIG.groundBraking;
-  const currentHorizontal = Math.hypot(velocity.x, velocity.z);
   const hasInput = move.lengthSq() > 0.001;
   const rate = hasInput ? acceleration : braking;
   const maxChange = rate * dt;
   const changeX = THREE.MathUtils.clamp(targetVX - velocity.x, -maxChange, maxChange);
   const changeZ = THREE.MathUtils.clamp(targetVZ - velocity.z, -maxChange, maxChange);
-  playerBody.applyImpulse({ x: changeX * CONFIG.playerMass, y: 0, z: changeZ * CONFIG.playerMass }, true);
+
+  playerBody.applyImpulse({
+    x: changeX * CONFIG.playerMass,
+    y: 0,
+    z: changeZ * CONFIG.playerMass
+  }, true);
 
   if (!inWater && down("Space") && grounded && !jumpLatch) {
-    playerBody.setLinvel({ x: playerBody.linvel().x, y: CONFIG.jumpSpeed, z: playerBody.linvel().z }, true);
+    playerBody.setLinvel({
+      x: playerBody.linvel().x,
+      y: CONFIG.jumpSpeed,
+      z: playerBody.linvel().z
+    }, true);
     jumpLatch = true;
   }
   if (!down("Space")) jumpLatch = false;
 
   applyWaterPhysics(dt, waterInfo);
-  animateHumanoid(playerModel, currentHorizontal, grounded, running, dt, inWater);
+  animateHumanoid(playerModel, Math.hypot(velocity.x, velocity.z), grounded, running, dt, inWater);
 }
 
 function animateHumanoid(model, speed, grounded, running, dt, inWater = false) {
@@ -366,47 +365,6 @@ function animateHumanoid(model, speed, grounded, running, dt, inWater = false) {
   limbs.foreArmR.rotation.x = -swing * 0.25;
 }
 
-function updateCamera(dt) {
-  const playerPosition = playerBody.translation();
-  cameraYaw += (down("KeyQ") ? CONFIG.cameraYawSpeed : 0) * dt;
-  cameraYaw -= (down("KeyE") ? CONFIG.cameraYawSpeed : 0) * dt;
-  if (down("ArrowLeft")) cameraYaw += CONFIG.cameraYawSpeed * dt;
-  if (down("ArrowRight")) cameraYaw -= CONFIG.cameraYawSpeed * dt;
-  if (down("ArrowUp")) cameraPitch += CONFIG.cameraPitchSpeed * dt;
-  if (down("ArrowDown")) cameraPitch -= CONFIG.cameraPitchSpeed * dt;
-  cameraPitch = THREE.MathUtils.clamp(cameraPitch, CONFIG.cameraPitchMin, CONFIG.cameraPitchMax);
-
-  const horizontal = Math.cos(cameraPitch) * CONFIG.cameraDistance;
-  const desired = new THREE.Vector3(
-    playerPosition.x - Math.sin(cameraYaw) * horizontal,
-    playerPosition.y + CONFIG.cameraHeight + Math.sin(cameraPitch) * CONFIG.cameraDistance,
-    playerPosition.z + Math.cos(cameraYaw) * horizontal
-  );
-  const target = new THREE.Vector3(
-    playerPosition.x,
-    playerPosition.y + CONFIG.cameraLookHeight,
-    playerPosition.z
-  );
-
-  const direction = desired.clone().sub(target);
-  const length = direction.length();
-  if (length > 0.001) {
-    direction.normalize();
-    const ray = new RAPIER.Ray(
-      { x: target.x, y: target.y, z: target.z },
-      { x: direction.x, y: direction.y, z: direction.z }
-    );
-    const hit = physicsWorld.castRay(ray, length, true, undefined, undefined, playerCollider.handle);
-    if (hit) {
-      const safeLength = Math.max(1.0, hit.timeOfImpact - CONFIG.cameraCollisionPadding);
-      desired.copy(target).addScaledVector(direction, Math.min(length, safeLength));
-    }
-  }
-
-  camera.position.lerp(desired, 1 - Math.exp(-CONFIG.cameraSmoothing * dt));
-  camera.lookAt(target);
-}
-
 function updateSun(dt) {
   gameHours = (gameHours + (dt / CONFIG.dayLengthSeconds) * 24) % 24;
   const sunAngle = (gameHours - 6) / 24 * Math.PI * 2;
@@ -424,9 +382,17 @@ function updateSun(dt) {
 
   const daylight = THREE.MathUtils.clamp((altitude + 0.12) / 0.75, 0, 1);
   sunLight.intensity = CONFIG.sunIntensity * (0.08 + daylight * 0.92);
-  hemiLight.intensity = THREE.MathUtils.lerp(CONFIG.ambientNightIntensity, CONFIG.ambientDayIntensity, daylight);
+  hemiLight.intensity = THREE.MathUtils.lerp(
+    CONFIG.ambientNightIntensity,
+    CONFIG.ambientDayIntensity,
+    daylight
+  );
 
-  const sky = new THREE.Color().setHSL(0.56, 0.18 + daylight * 0.2, 0.18 + daylight * 0.48);
+  const sky = new THREE.Color().setHSL(
+    0.56,
+    0.18 + daylight * 0.2,
+    0.18 + daylight * 0.48
+  );
   scene.background.copy(sky);
   scene.fog.color.copy(sky);
 
@@ -487,7 +453,7 @@ function frame() {
   physicsWorld.step();
   syncVisuals();
   updateWaterHud();
-  updateCamera(dt);
+  cameraController?.update(dt);
   renderer.render(scene, camera);
   requestAnimationFrame(frame);
 }
@@ -504,14 +470,19 @@ async function boot() {
     physicsWorld = await initPhysics();
     setupScene();
 
-    // マップ生成はmap.jsに委譲。地形と水域の情報をここで共有します。
     mapState = buildMap(scene, CONFIG);
     terrainHeightAt = mapState.terrainHeightAt;
-
     createPlayer();
 
-    // NPCの生成・更新はnpc.jsのManagerへ委譲します。
-    // NPC側にも物理ワールドとプレイヤーを渡し、障害物・他NPC・プレイヤーとの距離を判断できるようにします。
+    cameraController = createCameraController({
+      camera,
+      config: CONFIG,
+      physicsWorld,
+      playerBody,
+      playerCollider,
+      isDown: down
+    });
+
     npcManager = createNPCManager({
       scene,
       config: CONFIG,
