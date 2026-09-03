@@ -25,10 +25,13 @@ External libraries:
 
 Implementation notes:
 - physics.js owns the Rapier world/body/collider helpers.
-- game.js owns Three.js, input, game loop, camera, NPC behavior and visual synchronization.
+- game.js owns Three.js, input, game loop, camera and player behavior.
+- map.js owns terrain, natural objects and water-related map data.
+- npc.js owns NPC generation, wandering AI, movement, animation and visual synchronization.
 - Player and NPC positions are read from Rapier after each physics step before updating Three.js models.
 - Player movement uses impulses derived from velocity error rather than directly teleporting the physics body.
 - Player grounding ray excludes the player's own collider to avoid false grounded states.
+- game.js creates the NPC manager and passes frame time to it instead of containing NPC behavior directly.
 
 Commits:
 - 717e594: separated the Rapier physics world into physics.js.
@@ -59,3 +62,11 @@ Commits:
 - HUDに浅瀬・遊泳状態と水深を表示する処理を追加。
 - NPCは湖へ不用意に入り込まないよう、移動先の選択時に水域を避けるよう変更。
 - 外部ライブラリの追加はなし。
+
+[2026-09-03 / NPC処理分離]
+- npc.jsを新規作成し、NPCの生成、徘徊AI、移動、向き、歩行アニメーションをgame.jsから分離。
+- NPCの物理ボディ生成には既存のphysics.jsを利用し、NPCの物理状態をRapier側で管理する構成を維持。
+- NPCの移動先決定ではmap.jsの水域判定を利用し、湖へ不用意に進入しないようにした。
+- game.jsはNPCマネージャーを生成し、毎フレームの経過時間を渡すだけの構成へ変更。
+- NPCの表示位置同期もnpc.jsへ移動し、Rapierの物理位置をThree.jsモデルへ反映する責務をNPC側へ集約。
+- NPC用に新しい外部ライブラリは追加していない。
