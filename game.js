@@ -302,74 +302,60 @@ function updatePlayer(dt) {
   const targetVX = move.x * targetSpeed;
   const targetVZ = move.z * targetSpeed;
   const velocity = playerBody.linvel();
-  const acceleration = inWater ? CONFIG.swimAcceleration : (grounded ? CONFIG.groundAcceleration : CONFIG.airAcceleration);
-  const braking = inWater ? CONFIG.swimBraking : (grounded ? CONFIG.groundBraking : CONFIG.airAcceleration * 0.55);
 
-  const deltaVX = targetVX - velocity.x;
-  const deltaVZ = targetVZ - velocity.z;
-  const hasInput = move.lengthSq() > 0.0001;
+  const acceleration = inWater ? CONFIG.swimAcceleration : (grounded ? CONFIG.groundAcceleration : CONFIG.airAcceleration);
+  const braking = inWater ? CONFIG.swimBraking : CONFIG.groundBraking;
+  const currentHorizontal = Math.hypot(velocity.x, velocity.z);
+  const hasInput = move.lengthSq() > 0.001;
   const rate = hasInput ? acceleration : braking;
   const maxChange = rate * dt;
-  const changeX = THREE.MathUtils.clamp(deltaVX, -maxChange, maxChange);
-  const changeZ = THREE.MathUtils.clamp(deltaVZ, -maxChange, maxChange);
+  const changeX = THREE.MathUtils.clamp(targetVX - velocity.x, -maxChange, maxChange);
+  const changeZ = THREE.MathUtils.clamp(targetVZ - velocity.z, -maxChange, maxChange);
   playerBody.applyImpulse({ x: changeX * CONFIG.playerMass, y: 0, z: changeZ * CONFIG.playerMass }, true);
 
-  const jumpDown = down("Space");
-  if (!inWater && jumpDown && !jumpLatch && grounded) {
-    const jumpDelta = CONFIG.jumpSpeed - Math.max(0, velocity.y);
-    playerBody.applyImpulse({ x: 0, y: jumpDelta * CONFIG.playerMass, z: 0 }, true);
+  if (!inWater && down("Space") && grounded && !jumpLatch) {
+    playerBody.setLinvel({ x: playerBody.linvel().x, y: CONFIG.jumpSpeed, z: playerBody.linvel().z }, true);
+    jumpLatch = true;
   }
-  jumpLatch = jumpDown;
+  if (!down("Space")) jumpLatch = false;
 
-  if (inWater) applyWaterPhysics(dt, waterInfo);
-
-  if (hasInput) {
-    const desiredAngle = Math.atan2(move.x, move.z);
-    const currentAngle = playerModel.rotation.y;
-    playerModel.rotation.y = THREE.MathUtils.lerpAngle(currentAngle, desiredAngle, 1 - Math.exp(-9 * dt));
-  }
-
-  const horizontalSpeed = Math.hypot(playerBody.linvel().x, playerBody.linvel().z);
-  animateHumanoid(playerModel, horizontalSpeed, grounded, running, dt, inWater);
+  applyWaterPhysics(dt, waterInfo);
+  animateHumanoid(playerModel, currentHorizontal, grounded, running, dt, inWater);
 }
 
 function animateHumanoid(model, speed, grounded, running, dt, inWater = false) {
   const limbs = model.userData.limbs;
-  const moving = speed > 0.2;
-  model.userData.phase += dt * (moving ? 6.0 + speed * 0.8 : 1.5);
-  const phase = model.userData.phase;
+  if (!limbs) return;
+  model.userData.phase += dt * (speed > 0.15 ? (running ? 10 : 7) : 1.5);
+  const intensity = Math.min(speed / (running ? CONFIG.runSpeed : CONFIG.walkSpeed), 1);
 
-  if (inWater) {
-    // 水中では手足を交互に動かす泳ぎ姿勢にします。
-    const swim = Math.sin(phase * 0.9) * 0.42;
-    const counter = Math.sin(phase * 0.9 + Math.PI) * 0.42;
-    limbs.thighL.rotation.x = swim * 0.7;
-    limbs.thighR.rotation.x = counter * 0.7;
-    limbs.shinL.rotation.x = -swim * 0.35;
-    limbs.shinR.rotation.x = -counter * 0.35;
-    limbs.upperArmL.rotation.x = counter;
-    limbs.upperArmR.rotation.x = swim;
-    limbs.foreArmL.rotation.x = -counter * 0.65;
-    limbs.foreArmR.rotation.x = -swim * 0.65;
-    return;
-  }
-
-  const targetSwing = moving && grounded ? (running ? 0.78 : 0.5) * Math.min(speed / CONFIG.runSpeed, 1) : 0;
-
-  if (!grounded) {
+  if (!grounded && !inWater) {
     limbs.thighL.rotation.x = -0.18;
     limbs.thighR.rotation.x = 0.18;
-    limbs.shinL.rotation.x = 0.15;
-    limbs.shinR.rotation.x = 0.15;
-    limbs.upperArmL.rotation.x = -0.18;
-    limbs.upperArmR.rotation.x = -0.18;
-    limbs.foreArmL.rotation.x = 0.1;
-    limbs.foreArmR.rotation.x = 0.1;
+    limbs.shinL.rotation.x = 0.18;
+    limbs.shinR.rotation.x = 0.18;
+    limbs.upperArmL.rotation.x = -0.28;
+    limbs.upperArmR.rotation.x = -0.28;
+    limbs.foreArmL.rotation.x = -0.12;
+    limbs.foreArmR.rotation.x = -0.12;
     return;
   }
 
-  const swing = Math.sin(phase) * targetSwing;
-  const opposite = Math.sin(phase + Math.PI) * targetSwing;
+  if (inWater) {
+    const swim = Math.sin(model.userData.phase) * 0.55;
+    limbs.thighL.rotation.x = swim;
+    limbs.thighR.rotation.x = -swim;
+    limbs.shinL.rotation.x = -swim * 0.55;
+    limbs.shinR.rotation.x = swim * 0.55;
+    limbs.upperArmL.rotation.x = -swim * 1.35;
+    limbs.upperArmR.rotation.x = swim * 1.35;
+    limbs.foreArmL.rotation.x = -swim * 0.8;
+    limbs.foreArmR.rotation.x = swim * 0.8;
+    return;
+  }
+
+  const swing = Math.sin(model.userData.phase) * 0.55 * intensity;
+  const opposite = -swing;
   limbs.thighL.rotation.x = swing;
   limbs.thighR.rotation.x = opposite;
   limbs.shinL.rotation.x = Math.max(0, -swing) * 0.5;
@@ -381,43 +367,53 @@ function animateHumanoid(model, speed, grounded, running, dt, inWater = false) {
 }
 
 function updateCamera(dt) {
+  const playerPosition = playerBody.translation();
+  cameraYaw += (down("KeyQ") ? CONFIG.cameraYawSpeed : 0) * dt;
+  cameraYaw -= (down("KeyE") ? CONFIG.cameraYawSpeed : 0) * dt;
   if (down("ArrowLeft")) cameraYaw += CONFIG.cameraYawSpeed * dt;
   if (down("ArrowRight")) cameraYaw -= CONFIG.cameraYawSpeed * dt;
   if (down("ArrowUp")) cameraPitch += CONFIG.cameraPitchSpeed * dt;
   if (down("ArrowDown")) cameraPitch -= CONFIG.cameraPitchSpeed * dt;
   cameraPitch = THREE.MathUtils.clamp(cameraPitch, CONFIG.cameraPitchMin, CONFIG.cameraPitchMax);
 
-  const playerPosition = playerBody.translation();
-  const target = tmpA.set(playerPosition.x, playerPosition.y + CONFIG.cameraLookHeight, playerPosition.z);
   const horizontal = Math.cos(cameraPitch) * CONFIG.cameraDistance;
-  const desired = tmpB.set(
-    target.x - Math.sin(cameraYaw) * horizontal,
-    target.y + Math.sin(cameraPitch) * CONFIG.cameraDistance,
-    target.z + Math.cos(cameraYaw) * horizontal
+  const desired = new THREE.Vector3(
+    playerPosition.x - Math.sin(cameraYaw) * horizontal,
+    playerPosition.y + CONFIG.cameraHeight + Math.sin(cameraPitch) * CONFIG.cameraDistance,
+    playerPosition.z + Math.cos(cameraYaw) * horizontal
+  );
+  const target = new THREE.Vector3(
+    playerPosition.x,
+    playerPosition.y + CONFIG.cameraLookHeight,
+    playerPosition.z
   );
 
-  const origin = new RAPIER.Vector3(target.x, target.y, target.z);
-  const rayDirection = new RAPIER.Vector3(desired.x - target.x, desired.y - target.y, desired.z - target.z);
-  const distance = rayDirection.norm();
-  if (distance > 0.001) rayDirection.normalize();
-  const ray = new RAPIER.Ray(origin, rayDirection);
-  const hit = physicsWorld.castRay(ray, distance, true, undefined, undefined, playerCollider.handle);
-  if (hit) {
-    const safeDistance = Math.max(0.8, hit.toi - CONFIG.cameraCollisionPadding);
-    desired.copy(target).add(tmpC.set(rayDirection.x, rayDirection.y, rayDirection.z).multiplyScalar(safeDistance));
+  const direction = desired.clone().sub(target);
+  const length = direction.length();
+  if (length > 0.001) {
+    direction.normalize();
+    const ray = new RAPIER.Ray(
+      { x: target.x, y: target.y, z: target.z },
+      { x: direction.x, y: direction.y, z: direction.z }
+    );
+    const hit = physicsWorld.castRay(ray, length, true, undefined, undefined, playerCollider.handle);
+    if (hit) {
+      const safeLength = Math.max(1.0, hit.timeOfImpact - CONFIG.cameraCollisionPadding);
+      desired.copy(target).addScaledVector(direction, Math.min(length, safeLength));
+    }
   }
 
   camera.position.lerp(desired, 1 - Math.exp(-CONFIG.cameraSmoothing * dt));
-  camera.lookAt(target.x, target.y, target.z);
+  camera.lookAt(target);
 }
 
 function updateSun(dt) {
-  gameHours = (gameHours + dt * 24 / CONFIG.dayLengthSeconds) % 24;
-  const angle = (gameHours - 6) / 24 * Math.PI * 2;
-  const altitude = Math.sin(angle);
-  const azimuth = angle + Math.PI * 0.15;
-  const horizontal = Math.cos(angle);
-  const distance = 85;
+  gameHours = (gameHours + (dt / CONFIG.dayLengthSeconds) * 24) % 24;
+  const sunAngle = (gameHours - 6) / 24 * Math.PI * 2;
+  const altitude = Math.sin(sunAngle);
+  const azimuth = sunAngle * 0.42;
+  const horizontal = Math.cos(sunAngle);
+  const distance = 95;
   const sunY = altitude * distance;
   const sunX = Math.cos(azimuth) * horizontal * distance;
   const sunZ = Math.sin(azimuth) * horizontal * distance;
@@ -515,13 +511,16 @@ async function boot() {
     createPlayer();
 
     // NPCの生成・更新はnpc.jsのManagerへ委譲します。
+    // NPC側にも物理ワールドとプレイヤーを渡し、障害物・他NPC・プレイヤーとの距離を判断できるようにします。
     npcManager = createNPCManager({
       scene,
       config: CONFIG,
       terrainHeightAt,
       mapState,
       createModel: createHumanoid,
-      animateModel: animateHumanoid
+      animateModel: animateHumanoid,
+      physicsWorld,
+      playerBody
     });
     npcManager.createAll();
 
