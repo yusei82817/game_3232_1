@@ -35,3 +35,6 @@ Commits:
 - 3aed3e8: corrected Rapier heightfield scale construction.
 - 8fa95e8: implemented player movement, camera, animation and related systems.
 - 55080d3: fixed player grounding and jump input handling.
+
+注意事項:
+- 以降、log.txtへの記入は、日本語でお願いします。
