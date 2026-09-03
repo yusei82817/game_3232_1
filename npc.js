@@ -109,7 +109,7 @@ export function createNPCManager({ scene, config, terrainHeightAt, mapState, cre
       );
     }
 
-    // game.jsから渡された人型生成関数が作る共通アニメーション情報を利用します。
+    // NPCはプレイヤーと同じ人型構造を使い、速度に応じて歩行アニメーションを変えます。
     const limbs = npc.model.userData.limbs;
     const speed = Math.hypot(velocity.x, velocity.z);
     const moving = speed > 0.2;
@@ -131,6 +131,14 @@ export function createNPCManager({ scene, config, terrainHeightAt, mapState, cre
     for (const npc of npcs) updateNPC(npc, dt);
   }
 
+  function syncVisuals() {
+    // NPCの表示位置はRapierの物理状態から毎フレーム決定します。
+    for (const npc of npcs) {
+      const position = npc.body.translation();
+      npc.model.position.set(position.x, position.y - 1.04, position.z);
+    }
+  }
+
   function createAll() {
     for (let i = 0; i < config.npcCount; i++) createNPC(i);
   }
@@ -139,5 +147,5 @@ export function createNPCManager({ scene, config, terrainHeightAt, mapState, cre
     return npcs;
   }
 
-  return { createAll, update, getAll };
+  return { createAll, update, syncVisuals, getAll };
 }
