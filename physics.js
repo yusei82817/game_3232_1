@@ -1,13 +1,8 @@
 /*
  * 物理ワールド担当。
  *
- * ゲーム本体(game.js)からRapierの細かなAPIを切り離し、
- * 「物理状態が正本」という設計を保ちます。
- *
- * 重要:
- * - プレイヤーの位置・速度はRapier側を正本にします。
- * - Three.jsのモデルを先に移動させて物理を追従させることはしません。
- * - 地形と表示メッシュは同じ高さデータから作り、衝突面と見た目を一致させます。
+ * game.jsからRapierの細かなAPIを切り離し、「物理状態が正本」という設計を保ちます。
+ * プレイヤーやNPCの位置・速度はRapier側を正本とし、Three.jsはその結果を表示します。
  */
 
 import RAPIER from "https://cdn.jsdelivr.net/npm/@dimforge/rapier3d-compat@0.19.0/+esm";
@@ -44,10 +39,11 @@ export function createDynamicCapsule({ x, y, z, radius, halfHeight, mass, fricti
 }
 
 export function createFixedHeightfield({ rows, cols, heights, scale }) {
-  // Rapierのheightfieldは行・列数と高さ配列を直接受け取るため、
-  // Three.js側と同じ配列を渡して衝突形状を生成します。
-  const desc = RAPIER.ColliderDesc.heightfield(rows, cols, heights, scale);
-  return world.createCollider(desc);
+  // Three.jsと同じ高さ配列を使うことで、表示メッシュと衝突面を一致させます。
+  const rapierScale = new RAPIER.Vector3(scale.x, scale.y, scale.z);
+  return world.createCollider(
+    RAPIER.ColliderDesc.heightfield(rows, cols, heights, rapierScale)
+  );
 }
 
 export function createFixedBall({ x, y, z, radius, friction = 0.9, restitution = 0.08 }) {
