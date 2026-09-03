@@ -1,16 +1,18 @@
 /*
  * WASTELAND // FIELD TEST
  *
- * ゲーム本体。Three.jsは見た目、physics.js/Rapierは物理状態、map.jsはマップ、
- * npc.jsはNPC、camera.jsは三人称カメラ、field.jsは時間・天候・環境を担当します。
+ * ゲーム全体の初期化・入力・描画ループを担当します。
+ * physics.jsは物理、map.jsはマップ、npc.jsはNPC、camera.jsはカメラ、
+ * field.jsは時間・天候・環境、player.jsはプレイヤー固有処理を担当します。
  */
 
 import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js";
-import { initPhysics, createDynamicCapsule, RAPIER } from "./physics.js";
+import { initPhysics } from "./physics.js";
 import { buildMap } from "./map.js";
 import { createNPCManager } from "./npc.js";
 import { createCameraController } from "./camera.js";
 import { createFieldController } from "./field.js";
+import { createPlayerController, animateHumanoid } from "./player.js";
 
 const CONFIG = {
   worldSize: 180,
@@ -56,18 +58,14 @@ const CONFIG = {
 };
 
 let scene, camera, renderer, physicsWorld;
-let playerBody, playerCollider, playerModel;
 let sunLight, sunMesh, hemiLight;
-let npcManager, cameraController, fieldController;
+let npcManager, cameraController, fieldController, playerController;
 let terrainHeightAt, mapState;
-let jumpLatch = false;
 
 const keys = new Set();
 const clock = new THREE.Clock();
-const tmpA = new THREE.Vector3();
-const tmpB = new THREE.Vector3();
-const tmpC = new THREE.Vector3();
 
+// キー入力はgame.jsが一括管理し、各モジュールには必要な状態だけを渡します。
 window.addEventListener("keydown", (event) => {
   keys.add(event.code);
   if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Space"].includes(event.code)) {
@@ -85,6 +83,11 @@ function makeMaterial(color, roughness = 0.86) {
   return new THREE.MeshStandardMaterial({ color, roughness, metalness: 0.04 });
 }
 
+/**
+ * NPCとプレイヤーで共有する人型モデルを生成します。
+ * モデル生成はキャラクターの見た目に関する処理なので、
+ * プレイヤーの物理・操作ロジックとは分離したままgame.jsに残します。
+ */
 function createHumanoid(options = {}) {
   const group = new THREE.Group();
   const skin = makeMaterial(options.skin ?? 0xb98468);
@@ -138,23 +141,6 @@ function createHumanoid(options = {}) {
   return group;
 }
 
-function createPlayer() {
-  const physics = createDynamicCapsule({
-    x: 0,
-    y: terrainHeightAt(0, 0) + 2.4,
-    z: 0,
-    radius: CONFIG.playerRadius,
-    halfHeight: CONFIG.playerHalfHeight,
-    mass: CONFIG.playerMass,
-    friction: 0.82,
-    damping: 0.8
-  });
-  playerBody = physics.body;
-  playerCollider = physics.collider;
-  playerModel = createHumanoid({ shirt: 0x536a78, pants: 0x34383e });
-  scene.add(playerModel);
-}
-
 function setupScene() {
   scene = new THREE.Scene();
   scene.background = new THREE.Color(0x9aa4a0);
@@ -191,196 +177,17 @@ function setupScene() {
   scene.add(sunMesh);
 }
 
-function movementInput() {
-  const cameraYaw = cameraController?.getYaw() ?? Math.PI;
-  const forward = tmpA.set(Math.sin(cameraYaw), 0, -Math.cos(cameraYaw));
-  const right = tmpB.set(Math.cos(cameraYaw), 0, Math.sin(cameraYaw));
-  const move = tmpC.set(0, 0, 0);
-  if (down("KeyW", "ArrowUp")) move.add(forward);
-  if (down("KeyS", "ArrowDown")) move.sub(forward);
-  if (down("KeyD", "ArrowRight")) move.add(right);
-  if (down("KeyA", "ArrowLeft")) move.sub(right);
-  if (move.lengthSq() > 1) move.normalize();
-  return move;
-}
-
-function isGrounded() {
-  const translation = playerBody.translation();
-  const velocity = playerBody.linvel();
-  if (velocity.y > 1.0) return false;
-
-  const ray = new RAPIER.Ray(
-    { x: translation.x, y: translation.y - CONFIG.playerHalfHeight, z: translation.z },
-    { x: 0, y: -1, z: 0 }
-  );
-  const hit = physicsWorld.castRay(
-    ray,
-    CONFIG.groundProbeLength,
-    true,
-    undefined,
-    undefined,
-    playerCollider.handle
-  );
-  return hit !== null;
-}
-
-function getPlayerWaterInfo() {
-  if (!mapState || !playerBody) {
-    return { isWater: false, surfaceY: 0, depth: 0, shoreFactor: 0 };
-  }
-  const position = playerBody.translation();
-  return mapState.getWaterInfoAt(position.x, position.z);
-}
-
-function playerMassSafe() {
-  return Math.max(1, CONFIG.playerMass);
-}
-
-function applyWaterPhysics(dt, waterInfo) {
-  if (!waterInfo.isWater) return;
-
-  const position = playerBody.translation();
-  const velocity = playerBody.linvel();
-  const capsuleBottom = position.y - CONFIG.playerHalfHeight;
-  const capsuleHeight = CONFIG.playerHalfHeight * 2;
-  const submerged = THREE.MathUtils.clamp(
-    (waterInfo.surfaceY - capsuleBottom) / capsuleHeight,
-    0,
-    1
-  );
-
-  if (submerged <= 0) return;
-
-  const buoyancyImpulse = CONFIG.playerMass * 9.81 * CONFIG.waterBuoyancy * submerged * dt;
-  playerBody.applyImpulse({ x: 0, y: buoyancyImpulse, z: 0 }, true);
-
-  if (velocity.y < -1.8) {
-    playerBody.setLinvel({
-      x: velocity.x,
-      y: velocity.y * 0.72,
-      z: velocity.z
-    }, true);
-  }
-
-  if (down("Space")) {
-    const verticalDelta = CONFIG.swimUpSpeed - velocity.y;
-    const change = THREE.MathUtils.clamp(verticalDelta, -2.0, 2.0) * dt;
-    playerBody.applyImpulse({
-      x: 0,
-      y: change * playerMassSafe(),
-      z: 0
-    }, true);
-  }
-
-  const drag = Math.max(0, 1 - 2.2 * submerged * dt);
-  playerBody.setLinvel({
-    x: velocity.x * drag,
-    y: playerBody.linvel().y,
-    z: velocity.z * drag
-  }, true);
-
-  playerModel.userData.inWater = true;
-  playerModel.userData.submerged = submerged;
-  playerModel.userData.waterSurfaceY = waterInfo.surfaceY;
-}
-
-function updatePlayer(dt) {
-  const move = movementInput();
-  const waterInfo = getPlayerWaterInfo();
-  const inWater = waterInfo.isWater && waterInfo.depth > 0.35;
-  const grounded = isGrounded() && !inWater;
-  const running = down("KeyZ") && down("KeyW") && !inWater;
-
-  const targetSpeed = inWater
-    ? CONFIG.swimSpeed
-    : (running ? CONFIG.runSpeed : CONFIG.walkSpeed);
-  const targetVX = move.x * targetSpeed;
-  const targetVZ = move.z * targetSpeed;
-  const velocity = playerBody.linvel();
-
-  const acceleration = inWater
-    ? CONFIG.swimAcceleration
-    : (grounded ? CONFIG.groundAcceleration : CONFIG.airAcceleration);
-  const braking = inWater ? CONFIG.swimBraking : CONFIG.groundBraking;
-  const hasInput = move.lengthSq() > 0.001;
-  const rate = hasInput ? acceleration : braking;
-  const maxChange = rate * dt;
-  const changeX = THREE.MathUtils.clamp(targetVX - velocity.x, -maxChange, maxChange);
-  const changeZ = THREE.MathUtils.clamp(targetVZ - velocity.z, -maxChange, maxChange);
-
-  playerBody.applyImpulse({
-    x: changeX * CONFIG.playerMass,
-    y: 0,
-    z: changeZ * CONFIG.playerMass
-  }, true);
-
-  if (!inWater && down("Space") && grounded && !jumpLatch) {
-    playerBody.setLinvel({
-      x: playerBody.linvel().x,
-      y: CONFIG.jumpSpeed,
-      z: playerBody.linvel().z
-    }, true);
-    jumpLatch = true;
-  }
-  if (!down("Space")) jumpLatch = false;
-
-  applyWaterPhysics(dt, waterInfo);
-  animateHumanoid(playerModel, Math.hypot(velocity.x, velocity.z), grounded, running, dt, inWater);
-}
-
-function animateHumanoid(model, speed, grounded, running, dt, inWater = false) {
-  const limbs = model.userData.limbs;
-  if (!limbs) return;
-  model.userData.phase += dt * (speed > 0.15 ? (running ? 10 : 7) : 1.5);
-  const intensity = Math.min(speed / (running ? CONFIG.runSpeed : CONFIG.walkSpeed), 1);
-
-  if (!grounded && !inWater) {
-    limbs.thighL.rotation.x = -0.18;
-    limbs.thighR.rotation.x = 0.18;
-    limbs.shinL.rotation.x = 0.18;
-    limbs.shinR.rotation.x = 0.18;
-    limbs.upperArmL.rotation.x = -0.28;
-    limbs.upperArmR.rotation.x = -0.28;
-    limbs.foreArmL.rotation.x = -0.12;
-    limbs.foreArmR.rotation.x = -0.12;
-    return;
-  }
-
-  if (inWater) {
-    const swim = Math.sin(model.userData.phase) * 0.55;
-    limbs.thighL.rotation.x = swim;
-    limbs.thighR.rotation.x = -swim;
-    limbs.shinL.rotation.x = -swim * 0.55;
-    limbs.shinR.rotation.x = swim * 0.55;
-    limbs.upperArmL.rotation.x = -swim * 1.35;
-    limbs.upperArmR.rotation.x = swim * 1.35;
-    limbs.foreArmL.rotation.x = -swim * 0.8;
-    limbs.foreArmR.rotation.x = swim * 0.8;
-    return;
-  }
-
-  const swing = Math.sin(model.userData.phase) * 0.55 * intensity;
-  const opposite = -swing;
-  limbs.thighL.rotation.x = swing;
-  limbs.thighR.rotation.x = opposite;
-  limbs.shinL.rotation.x = Math.max(0, -swing) * 0.5;
-  limbs.shinR.rotation.x = Math.max(0, -opposite) * 0.5;
-  limbs.upperArmL.rotation.x = opposite * 0.72;
-  limbs.upperArmR.rotation.x = swing * 0.72;
-  limbs.foreArmL.rotation.x = -opposite * 0.25;
-  limbs.foreArmR.rotation.x = -swing * 0.25;
-}
-
 function syncVisuals() {
-  const playerPosition = playerBody.translation();
-  playerModel.position.set(playerPosition.x, playerPosition.y - 1.10, playerPosition.z);
+  // 物理ステップ後のRapier位置を各表示オブジェクトへ反映します。
+  playerController?.syncVisual();
   npcManager?.syncVisuals();
 }
 
 function updateWaterHud() {
   const status = document.getElementById("status");
-  if (!status || !playerBody) return;
-  const info = getPlayerWaterInfo();
+  if (!status || !playerController) return;
+
+  const info = playerController.getWaterInfo();
   const submerged = info.isWater ? Math.max(0, info.depth) : 0;
   if (info.isWater && submerged > 0.35) {
     status.textContent = `SWIMMING // DEPTH ${submerged.toFixed(1)}m`;
@@ -413,7 +220,9 @@ function showError(error) {
 
 function frame() {
   const dt = Math.min(clock.getDelta(), 0.05);
-  updatePlayer(dt);
+
+  // 物理・AI・環境を更新してからRapierを進め、最後に表示を同期します。
+  playerController?.update(dt);
   npcManager?.update(dt);
   fieldController?.update(dt);
   mapState?.update(dt);
@@ -443,19 +252,31 @@ async function boot() {
       sunLight,
       sunMesh,
       hemiLight,
-      getPlayerPosition: () => playerBody?.translation() ?? null
+      getPlayerPosition: () => playerController?.getBody()?.translation() ?? null
     });
 
     mapState = buildMap(scene, CONFIG);
     terrainHeightAt = mapState.terrainHeightAt;
-    createPlayer();
+
+    // 先にプレイヤー物理Bodyを作り、カメラが参照できる状態にします。
+    playerController = createPlayerController({
+      scene,
+      config: CONFIG,
+      physicsWorld,
+      terrainHeightAt,
+      mapState,
+      createModel: createHumanoid,
+      getCameraYaw: () => cameraController?.getYaw() ?? Math.PI,
+      isDown: down
+    });
+    playerController.create();
 
     cameraController = createCameraController({
       camera,
       config: CONFIG,
       physicsWorld,
-      playerBody,
-      playerCollider,
+      playerBody: playerController.getBody(),
+      playerCollider: playerController.getCollider(),
       isDown: down
     });
 
@@ -467,7 +288,7 @@ async function boot() {
       createModel: createHumanoid,
       animateModel: animateHumanoid,
       physicsWorld,
-      playerBody
+      playerBody: playerController.getBody()
     });
     npcManager.createAll();
 
