@@ -4,7 +4,8 @@
  * ゲーム本体。Three.jsは「見た目」、physics.js/Rapierは「物理状態」、map.jsは「マップ」を担当します。
  * プレイヤーについては、見た目のモデルを直接移動させず、Rapierの速度・位置を先に更新します。
  *
- * 今回は地形・岩の生成をmap.jsへ切り離しました。
+ * マップ生成はmap.jsへ切り離しています。水面もmap.jsで生成しますが、
+ * 水面自体には歩行用コリジョンを付けず、ここで水中状態・浮力・泳ぎを処理します。
  *
  * 重点:
  * - 人型プレイヤーを物理カプセルで支える
@@ -14,7 +15,8 @@
  * - ジャンプと接地判定
  * - 坂・段差を含む地形上での移動
  * - 三人称カメラの追従、回転、地形へのめり込み防止
- * - 歩行・走行・待機に応じた人型アニメーション
+ * - 歩行・走行・待機・水泳に応じた人型アニメーション
+ * - 水中では浮力を物理状態へ加え、陸上と異なる移動速度にする
  *
  * ブラウザだけで動かすため、外部3Dモデルは使わずThree.jsで人型を生成します。
  */
@@ -38,6 +40,13 @@ const CONFIG = {
   airAcceleration: 6.0,
   jumpSpeed: 5.8,
   groundProbeLength: 1.24,
+
+  // 水中の移動設定。水中では陸上より水平速度を落とし、Spaceで上向きに泳ぎます。
+  swimSpeed: 2.6,
+  swimAcceleration: 8.5,
+  swimBraking: 5.5,
+  swimUpSpeed: 3.2,
+  waterBuoyancy: 1.18,
 
   // カメラ。distance/heightを調整すると三人称視点の距離と高さを変更できます。
   cameraDistance: 6.4,
@@ -72,6 +81,7 @@ let gameHours = CONFIG.startTimeHours;
 let cameraYaw = Math.PI;
 let cameraPitch = 0.22;
 let terrainHeightAt;
+let mapState;
 let jumpLatch = false;
 
 const npcs = [];
@@ -250,7 +260,10 @@ function isGrounded() {
   const velocity = playerBody.linvel();
   if (velocity.y > 1.0) return false;
 
-  const ray = new RAPIER.Ray({ x: translation.x, y: translation.y - CONFIG.playerHalfHeight, z: translation.z }, { x: 0, y: -1, z: 0 });
+  const ray = new RAPIER.Ray(
+    { x: translation.x, y: translation.y - CONFIG.playerHalfHeight, z: translation.z },
+    { x: 0, y: -1, z: 0 }
+  );
   const hit = physicsWorld.castRay(
     ray,
     CONFIG.groundProbeLength,
@@ -262,16 +275,68 @@ function isGrounded() {
   return hit !== null;
 }
 
+function getPlayerWaterInfo() {
+  if (!mapState || !playerBody) return { isWater: false, surfaceY: 0, depth: 0, shoreFactor: 0 };
+  const position = playerBody.translation();
+  return mapState.getWaterInfoAt(position.x, position.z);
+}
+
+function applyWaterPhysics(dt, waterInfo) {
+  if (!waterInfo.isWater) return;
+
+  const position = playerBody.translation();
+  const velocity = playerBody.linvel();
+  const capsuleBottom = position.y - CONFIG.playerHalfHeight;
+  const capsuleTop = position.y + CONFIG.playerHalfHeight;
+  const capsuleHeight = CONFIG.playerHalfHeight * 2;
+  const submerged = THREE.MathUtils.clamp((waterInfo.surfaceY - capsuleBottom) / capsuleHeight, 0, 1);
+
+  if (submerged <= 0) return;
+
+  // 重力に対抗する浮力を深さに応じて加えます。完全に沈んだ状態ではほぼ体重分を支えます。
+  const buoyancyImpulse = CONFIG.playerMass * 9.81 * CONFIG.waterBuoyancy * submerged * dt;
+  playerBody.applyImpulse({ x: 0, y: buoyancyImpulse, z: 0 }, true);
+
+  // 水面付近で落下速度が大きくなりすぎないよう、水の抵抗を表現します。
+  if (velocity.y < -1.8) {
+    playerBody.setLinvel({ x: velocity.x, y: velocity.y * 0.72, z: velocity.z }, true);
+  }
+
+  // Spaceを押している間は上向きの泳ぎを行います。陸上のジャンプとは別処理です。
+  if (down("Space")) {
+    const verticalDelta = CONFIG.swimUpSpeed - velocity.y;
+    const change = THREE.MathUtils.clamp(verticalDelta, -2.0, 2.0) * dt;
+    playerBody.applyImpulse({ x: 0, y: change * playerMassSafe(), z: 0 }, true);
+  }
+
+  // 水中では水平速度にも抵抗を掛けます。
+  const drag = Math.max(0, 1 - 2.2 * submerged * dt);
+  playerBody.setLinvel({ x: velocity.x * drag, y: playerBody.linvel().y, z: velocity.z * drag }, true);
+
+  // 頭まで沈んでいる場合は、地上と同じ視点ではなく少し低い姿勢にします。
+  playerModel.userData.inWater = true;
+  playerModel.userData.submerged = submerged;
+  playerModel.userData.waterSurfaceY = waterInfo.surfaceY;
+  void capsuleTop;
+}
+
+function playerMassSafe() {
+  return Math.max(1, CONFIG.playerMass);
+}
+
 function updatePlayer(dt) {
   const move = movementInput();
-  const grounded = isGrounded();
-  const running = down("KeyZ") && down("KeyW");
-  const targetSpeed = running ? CONFIG.runSpeed : CONFIG.walkSpeed;
+  const waterInfo = getPlayerWaterInfo();
+  const inWater = waterInfo.isWater && waterInfo.depth > 0.35;
+  const grounded = isGrounded() && !inWater;
+  const running = down("KeyZ") && down("KeyW") && !inWater;
+
+  const targetSpeed = inWater ? CONFIG.swimSpeed : (running ? CONFIG.runSpeed : CONFIG.walkSpeed);
   const targetVX = move.x * targetSpeed;
   const targetVZ = move.z * targetSpeed;
   const velocity = playerBody.linvel();
-  const acceleration = grounded ? CONFIG.groundAcceleration : CONFIG.airAcceleration;
-  const braking = grounded ? CONFIG.groundBraking : CONFIG.airAcceleration * 0.55;
+  const acceleration = inWater ? CONFIG.swimAcceleration : (grounded ? CONFIG.groundAcceleration : CONFIG.airAcceleration);
+  const braking = inWater ? CONFIG.swimBraking : (grounded ? CONFIG.groundBraking : CONFIG.airAcceleration * 0.55);
 
   const deltaVX = targetVX - velocity.x;
   const deltaVZ = targetVZ - velocity.z;
@@ -283,28 +348,48 @@ function updatePlayer(dt) {
   playerBody.applyImpulse({ x: changeX * CONFIG.playerMass, y: 0, z: changeZ * CONFIG.playerMass }, true);
 
   const jumpDown = down("Space");
-  if (jumpDown && !jumpLatch && grounded) {
+  if (!inWater && jumpDown && !jumpLatch && grounded) {
     const jumpDelta = CONFIG.jumpSpeed - Math.max(0, velocity.y);
     playerBody.applyImpulse({ x: 0, y: jumpDelta * CONFIG.playerMass, z: 0 }, true);
   }
   jumpLatch = jumpDown;
 
+  if (inWater) {
+    applyWaterPhysics(dt, waterInfo);
+  }
+
   if (hasInput) {
     const desiredAngle = Math.atan2(move.x, move.z);
     const currentAngle = playerModel.rotation.y;
-    playerModel.rotation.y = THREE.MathUtils.lerpAngle(currentAngle, desiredAngle, 1 - Math.exp(-12 * dt));
+    playerModel.rotation.y = THREE.MathUtils.lerpAngle(currentAngle, desiredAngle, 1 - Math.exp(-9 * dt));
   }
 
-  const horizontalSpeed = Math.hypot(velocity.x, velocity.z);
-  animateHumanoid(playerModel, horizontalSpeed, grounded, running, dt);
+  const horizontalSpeed = Math.hypot(playerBody.linvel().x, playerBody.linvel().z);
+  animateHumanoid(playerModel, horizontalSpeed, grounded, running, dt, inWater);
 }
 
-function animateHumanoid(model, speed, grounded, running, dt) {
+function animateHumanoid(model, speed, grounded, running, dt, inWater = false) {
   const limbs = model.userData.limbs;
-  const moving = speed > 0.35;
-  const targetSwing = moving && grounded ? (running ? 0.78 : 0.5) * Math.min(speed / CONFIG.runSpeed, 1) : 0;
+  const moving = speed > 0.2;
   model.userData.phase += dt * (moving ? 6.0 + speed * 0.8 : 1.5);
   const phase = model.userData.phase;
+
+  if (inWater) {
+    // 水中では手足を交互に動かす泳ぎ姿勢にします。
+    const swim = Math.sin(phase * 0.9) * 0.42;
+    const counter = Math.sin(phase * 0.9 + Math.PI) * 0.42;
+    limbs.thighL.rotation.x = swim * 0.7;
+    limbs.thighR.rotation.x = counter * 0.7;
+    limbs.shinL.rotation.x = -swim * 0.35;
+    limbs.shinR.rotation.x = -counter * 0.35;
+    limbs.upperArmL.rotation.x = counter;
+    limbs.upperArmR.rotation.x = swim;
+    limbs.foreArmL.rotation.x = -counter * 0.65;
+    limbs.foreArmR.rotation.x = -swim * 0.65;
+    return;
+  }
+
+  const targetSwing = moving && grounded ? (running ? 0.78 : 0.5) * Math.min(speed / CONFIG.runSpeed, 1) : 0;
 
   if (!grounded) {
     limbs.thighL.rotation.x = -0.18;
@@ -337,11 +422,19 @@ function updateNPCs(dt) {
 
     if (npc.thinkTimer <= 0 || Math.hypot(position.x - npc.target.x, position.z - npc.target.z) < 1.8) {
       npc.thinkTimer = 0.45 + Math.random() * 0.6;
-      const angle = Math.random() * Math.PI * 2;
-      const radius = 7 + Math.random() * 16;
-      npc.target.set(position.x + Math.cos(angle) * radius, 0, position.z + Math.sin(angle) * radius);
-      npc.target.x = THREE.MathUtils.clamp(npc.target.x, -CONFIG.worldSize * 0.46, CONFIG.worldSize * 0.46);
-      npc.target.z = THREE.MathUtils.clamp(npc.target.z, -CONFIG.worldSize * 0.46, CONFIG.worldSize * 0.46);
+      let targetFound = false;
+
+      // NPCは湖へ不用意に入り込まず、岸周辺を歩くようにします。
+      for (let attempt = 0; attempt < 8 && !targetFound; attempt++) {
+        const angle = Math.random() * Math.PI * 2;
+        const radius = 7 + Math.random() * 16;
+        const x = THREE.MathUtils.clamp(position.x + Math.cos(angle) * radius, -CONFIG.worldSize * 0.46, CONFIG.worldSize * 0.46);
+        const z = THREE.MathUtils.clamp(position.z + Math.sin(angle) * radius, -CONFIG.worldSize * 0.46, CONFIG.worldSize * 0.46);
+        if (!mapState?.isWaterAt(x, z)) {
+          npc.target.set(x, 0, z);
+          targetFound = true;
+        }
+      }
     }
 
     const direction = tmpA.set(npc.target.x - position.x, 0, npc.target.z - position.z);
@@ -358,7 +451,7 @@ function updateNPCs(dt) {
       npc.model.rotation.y = THREE.MathUtils.lerpAngle(npc.model.rotation.y, angle, 1 - Math.exp(-8 * dt));
     }
 
-    animateHumanoid(npc.model, Math.hypot(velocity.x, velocity.z), true, false, dt);
+    animateHumanoid(npc.model, Math.hypot(velocity.x, velocity.z), true, false, dt, false);
   }
 }
 
@@ -386,7 +479,7 @@ function updateCamera(dt) {
   const hit = physicsWorld.castRay(ray, distance, true, undefined, undefined, playerCollider.handle);
   if (hit) {
     const safeDistance = Math.max(0.8, hit.toi - CONFIG.cameraCollisionPadding);
-    desired.copy(target).add(tmpC.copy(rayDirection).multiplyScalar(safeDistance));
+    desired.copy(target).add(tmpC.set(rayDirection.x, rayDirection.y, rayDirection.z).multiplyScalar(safeDistance));
   }
 
   camera.position.lerp(desired, 1 - Math.exp(-CONFIG.cameraSmoothing * dt));
@@ -434,6 +527,20 @@ function syncVisuals() {
   }
 }
 
+function updateWaterHud() {
+  const status = document.getElementById("status");
+  if (!status || !playerBody) return;
+  const info = getPlayerWaterInfo();
+  const submerged = info.isWater ? Math.max(0, info.depth) : 0;
+  if (info.isWater && submerged > 0.35) {
+    status.textContent = `SWIMMING // DEPTH ${submerged.toFixed(1)}m`;
+  } else if (info.isWater) {
+    status.textContent = "SHALLOW WATER";
+  } else {
+    status.textContent = "WORLD ONLINE";
+  }
+}
+
 function showReady() {
   const loading = document.getElementById("loading");
   const hud = document.getElementById("hud");
@@ -459,8 +566,10 @@ function frame() {
   updatePlayer(dt);
   updateNPCs(dt);
   updateSun(dt);
+  mapState?.update(dt);
   physicsWorld.step();
   syncVisuals();
+  updateWaterHud();
   updateCamera(dt);
   renderer.render(scene, camera);
   requestAnimationFrame(frame);
@@ -478,9 +587,9 @@ async function boot() {
     physicsWorld = await initPhysics();
     setupScene();
 
-    // マップ生成はmap.jsに委譲。ここで返された高さ関数をプレイヤー/NPCでも共有します。
-    const map = buildMap(scene, CONFIG);
-    terrainHeightAt = map.terrainHeightAt;
+    // マップ生成はmap.jsに委譲。地形と水域の情報をここで共有します。
+    mapState = buildMap(scene, CONFIG);
+    terrainHeightAt = mapState.terrainHeightAt;
 
     createPlayer();
     for (let i = 0; i < CONFIG.npcCount; i++) createNPC(i);
