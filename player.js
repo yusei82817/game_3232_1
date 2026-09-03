@@ -13,13 +13,6 @@ const tmpForward = new THREE.Vector3();
 const tmpRight = new THREE.Vector3();
 const tmpMove = new THREE.Vector3();
 
-/**
- * プレイヤーを生成・更新するコントローラー。
- *
- * createModelはgame.js側の共通人型モデル生成関数を受け取ります。
- * getCameraYawはカメラ側の現在のYawだけを受け取り、player.jsから
- * camera.jsへ直接依存しない構成にしています。
- */
 export function createPlayerController({
   scene,
   config,
@@ -55,8 +48,6 @@ export function createPlayerController({
     const velocity = playerBody.linvel();
     if (velocity.y > 1.0) return false;
 
-    // 足元へRayを飛ばして地面との接触を確認します。
-    // プレイヤー自身のColliderは除外し、自己衝突による誤判定を防ぎます。
     const ray = new RAPIER.Ray(
       { x: translation.x, y: translation.y - config.playerHalfHeight, z: translation.z },
       { x: 0, y: -1, z: 0 }
@@ -109,11 +100,9 @@ export function createPlayerController({
       return;
     }
 
-    // 浮力は水中に入っているカプセルの割合に応じて増減させます。
     const buoyancyImpulse = config.playerMass * 9.81 * config.waterBuoyancy * submerged * dt;
     playerBody.applyImpulse({ x: 0, y: buoyancyImpulse, z: 0 }, true);
 
-    // 落下速度が大きいときは水の抵抗を強くして、水面への突入を自然に抑えます。
     if (velocity.y < -1.8) {
       playerBody.setLinvel({
         x: velocity.x,
@@ -169,8 +158,6 @@ export function createPlayerController({
     const changeX = THREE.MathUtils.clamp(targetVX - velocity.x, -maxChange, maxChange);
     const changeZ = THREE.MathUtils.clamp(targetVZ - velocity.z, -maxChange, maxChange);
 
-    // 位置を直接変更せず、現在速度との差からImpulseを計算します。
-    // そのため、加速・減速・空中制御はRapierの物理状態に反映されます。
     playerBody.applyImpulse({
       x: changeX * config.playerMass,
       y: 0,
@@ -190,7 +177,6 @@ export function createPlayerController({
 
     applyWaterPhysics(dt, waterInfo);
 
-    // アニメーションには物理速度を使い、見た目の処理から物理位置を直接変更しません。
     animateHumanoid(
       playerModel,
       Math.hypot(velocity.x, velocity.z),
@@ -205,8 +191,6 @@ export function createPlayerController({
   function syncVisual() {
     if (!playerBody || !playerModel) return;
     const position = playerBody.translation();
-
-    // Rapierの位置を表示モデルへ反映します。表示側から物理位置を上書きしません。
     playerModel.position.set(position.x, position.y - 1.10, position.z);
   }
 
@@ -239,11 +223,6 @@ export function createPlayerController({
   };
 }
 
-/**
- * NPCと共有できる人型アニメーションです。
- * プレイヤー処理本体とは分離しつつ、game.jsが共通モデル生成関数を
- * NPCへ渡せるようにplayer.jsから公開します。
- */
 export function animateHumanoid(model, speed, grounded, running, dt, inWater = false, config = null) {
   const limbs = model?.userData?.limbs;
   if (!limbs) return;
