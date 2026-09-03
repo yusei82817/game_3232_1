@@ -12,7 +12,8 @@ import { buildMap } from "./map.js";
 import { createNPCManager } from "./npc.js";
 import { createCameraController } from "./camera.js";
 import { createFieldController } from "./field.js";
-import { createPlayerController, animateHumanoid } from "./player.js";
+import { createPlayerController } from "./player.js";
+import { animateHumanoid } from "./animation.js";
 import { createInputController } from "./input.js";
 
 const CONFIG = {
