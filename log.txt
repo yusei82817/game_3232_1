@@ -1,30 +1,37 @@
 External Library / Development Log
 ====================================
 
-[2026-09-02]
+[2026-09-02 / 2026-09-03]
 
-Game specification notes:
-- Keyboard movement uses WASD or the Arrow Keys.
-- The Arrow Keys may be assigned to camera-direction controls if that produces a better third-person control scheme.
-- Stage environment: wilderness / wasteland.
-- Third-person rear camera follows the player.
-- Player uses a human-like body structure suitable for movement.
-- The game is a GTA-style exploration / action / adventure game, using an original setting and assets.
-- NPCs are action/behavior-only; no conversational NPC system is required.
-- NPCs may be somewhat lighter than the player, but should not be arbitrarily simplified during development.
-- Z + W means running. Input handling must support at least three simultaneous keys, including combinations such as Z + W + A/D.
-- Visual/display information and internal/game/physics information must be handled separately and kept synchronized; physics/internal state is authoritative for physical placement.
-- The sun's altitude, direction, illumination, shadows, and environmental lighting should be represented faithfully enough to feel natural rather than as an arbitrary fixed light.
+Game specifications recorded:
+1. Game direction: GTA風の探索・アクション・アドベンチャー型3Dゲーム。
+2. Third-person rear-view camera.
+3. Player is a human-like character with a natural body structure.
+4. Movement uses WASD or Arrow Keys; Arrow Keys may also be assigned to camera direction when useful.
+5. Stage is wilderness / wasteland with terrain undulation and natural objects.
+6. Visual/display information and internal/game/physics information must be handled separately and kept consistent; physics/internal state is authoritative for physical placement.
+7. Sun altitude, direction, illumination, shadows and environmental light should be represented faithfully and naturally according to in-game time.
+8. NPCs are part of the game world.
+9. NPCs are action/behavior-only rather than conversation-driven.
+10. NPCs may be somewhat lighter than the player, but must not be arbitrarily simplified during development.
+11. Z + W is the run action; input must support at least three simultaneous keys.
+12. Player movement is being built with acceleration/deceleration, grounded movement, jumping, terrain contact, camera collision handling and human-like movement animation.
 
 External libraries:
-- Rapier 3D: physics simulation and collision handling for the 3D game.
-  Source: jsDelivr CDN, browser-compatible ESM build.
-  Version: 0.19.0.
-- Three.js: WebGL 3D rendering, scene management, camera, lighting, and model display.
-  Source: jsDelivr CDN, browser-compatible ESM build.
-  Version: r180 (0.180.0).
+- Three.js 0.180.0: browser-side 3D rendering, lighting, camera and human model generation.
+  Source: https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js
+- Rapier 3D 0.19.0: browser-side physics simulation, gravity and collision handling.
+  Source: https://cdn.jsdelivr.net/npm/@dimforge/rapier3d-compat@0.19.0/+esm
 
-Implementation note:
-- The initial implementation is designed for direct browser execution and static hosting such as GitHub Pages or Netlify.
-- Physics state remains authoritative; Three.js objects mirror the resulting state for display.
-- External library additions and removals must continue to be recorded here.
+Implementation notes:
+- physics.js owns the Rapier world/body/collider helpers.
+- game.js owns Three.js, input, game loop, camera, NPC behavior and visual synchronization.
+- Player and NPC positions are read from Rapier after each physics step before updating Three.js models.
+- Player movement uses impulses derived from velocity error rather than directly teleporting the physics body.
+- Player grounding ray excludes the player's own collider to avoid false grounded states.
+
+Commits:
+- 717e594: separated the Rapier physics world into physics.js.
+- 3aed3e8: corrected Rapier heightfield scale construction.
+- 8fa95e8: implemented player movement, camera, animation and related systems.
+- 55080d3: fixed player grounding and jump input handling.
