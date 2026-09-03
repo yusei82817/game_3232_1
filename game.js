@@ -18,7 +18,7 @@
  */
 
 import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js";
-import { initPhysics, getWorld, createDynamicCapsule, createFixedHeightfield, createFixedBall } from "./physics.js";
+import { initPhysics, createDynamicCapsule, createFixedHeightfield, createFixedBall, RAPIER } from "./physics.js";
 
 const CONFIG = {
   worldSize: 180,
@@ -69,6 +69,7 @@ let gameHours = CONFIG.startTimeHours;
 let cameraYaw = Math.PI;
 let cameraPitch = 0.22;
 let terrainHeightAt;
+let jumpLatch = false;
 
 const npcs = [];
 const keys = new Set();
@@ -227,9 +228,7 @@ function createPlayer() {
   });
   playerBody = physics.body;
   playerCollider = physics.collider;
-
   playerModel = createHumanoid({ shirt: 0x536a78, pants: 0x34383e });
-  playerModel.castShadow = true;
   scene.add(playerModel);
 }
 
@@ -254,7 +253,6 @@ function createNPC(index) {
   });
   model.scale.setScalar(0.96);
   scene.add(model);
-
   npcs.push({
     body: physics.body,
     collider: physics.collider,
@@ -284,7 +282,6 @@ function setupScene() {
 
   hemiLight = new THREE.HemisphereLight(0xbfd4dd, 0x5b5548, CONFIG.ambientDayIntensity);
   scene.add(hemiLight);
-
   sunLight = new THREE.DirectionalLight(0xfff1d1, CONFIG.sunIntensity);
   sunLight.castShadow = true;
   sunLight.shadow.mapSize.set(1536, 1536);
@@ -296,11 +293,7 @@ function setupScene() {
   sunLight.shadow.camera.bottom = -55;
   scene.add(sunLight);
   scene.add(sunLight.target);
-
-  sunMesh = new THREE.Mesh(
-    new THREE.SphereGeometry(2.2, 16, 12),
-    new THREE.MeshBasicMaterial({ color: 0xffe6a3 })
-  );
+  sunMesh = new THREE.Mesh(new THREE.SphereGeometry(2.2, 16, 12), new THREE.MeshBasicMaterial({ color: 0xffe6a3 }));
   scene.add(sunMesh);
 }
 
@@ -309,24 +302,28 @@ function movementInput() {
   const forward = tmpA.set(Math.sin(cameraYaw), 0, -Math.cos(cameraYaw));
   const right = tmpB.set(Math.cos(cameraYaw), 0, Math.sin(cameraYaw));
   const move = tmpC.set(0, 0, 0);
-
   if (down("KeyW", "ArrowUp")) move.add(forward);
   if (down("KeyS", "ArrowDown")) move.sub(forward);
   if (down("KeyD", "ArrowRight")) move.add(right);
   if (down("KeyA", "ArrowLeft")) move.sub(right);
-
   if (move.lengthSq() > 1) move.normalize();
   return move;
 }
 
 function isGrounded() {
-  // カプセル中心から下向きに短いRayを飛ばし、足元の地形/物体を確認します。
-  // 上向きの速度中に地面判定を残しすぎないよう、垂直速度も条件にします。
   const translation = playerBody.translation();
   const velocity = playerBody.linvel();
   if (velocity.y > 1.0) return false;
-  const ray = new RAPIER.Ray({ x: translation.x, y: translation.y, z: translation.z }, { x: 0, y: -1, z: 0 });
-  const hit = physicsWorld.castRay(ray, CONFIG.groundProbeLength, true);
+
+  // プレイヤー自身のカプセルをRayが拾わないよう、Rayの開始点を足元側へ置きます。
+  // さらにRapierのexclude collider指定を使い、自分自身を接地判定から除外します。
+  const rayOrigin = {
+    x: translation.x,
+    y: translation.y - (CONFIG.playerHalfHeight + CONFIG.playerRadius) + 0.08,
+    z: translation.z
+  };
+  const ray = new RAPIER.Ray(rayOrigin, { x: 0, y: -1, z: 0 });
+  const hit = physicsWorld.castRay(ray, CONFIG.groundProbeLength, true, undefined, undefined, playerCollider.handle);
   return hit !== null;
 }
 
@@ -354,20 +351,17 @@ function updatePlayer(dt) {
     z: changeZ * CONFIG.playerMass
   }, true);
 
-  // ジャンプは接地中だけ許可。SpaceまたはZ以外の移動キーを邪魔しない構造です。
-  if (down("Space") && grounded && !playerBody.userData?.jumpLatch) {
+  // Spaceは押しっぱなしで連続ジャンプしないよう、押下→解放の一回だけ受け付けます。
+  if (down("Space") && grounded && !jumpLatch) {
     playerBody.applyImpulse({ x: 0, y: CONFIG.jumpSpeed * CONFIG.playerMass, z: 0 }, true);
-    playerBody.userData = { jumpLatch: true };
+    jumpLatch = true;
   }
-  if (!down("Space")) playerBody.userData = { jumpLatch: false };
+  if (!down("Space")) jumpLatch = false;
 
-  // 動いている方向へ身体を向けます。回転は物理ボディを直接回さず表示側だけで行います。
-  // プレイヤーの衝突姿勢はlockRotationsで安定させています。
   if (move.lengthSq() > 0.0001) {
     const desiredYaw = Math.atan2(move.x, move.z);
     playerModel.rotation.y = THREE.MathUtils.lerpAngle(playerModel.rotation.y, desiredYaw, 1 - Math.exp(-12 * dt));
   }
-
   animateHumanoid(playerModel, Math.hypot(velocity.x, velocity.z), dt, grounded, running);
 }
 
@@ -377,7 +371,6 @@ function animateHumanoid(model, speed, dt, grounded, running) {
   const frequency = running ? 11 : 8;
   model.userData.phase += dt * frequency * (moving ? 1 : 0.15);
   const swing = moving && grounded ? Math.sin(model.userData.phase) * (running ? 0.72 : 0.48) : 0;
-
   limbs.thighL.rotation.x = swing;
   limbs.thighR.rotation.x = -swing;
   limbs.shinL.rotation.x = Math.max(0, -swing) * 0.45;
@@ -387,7 +380,6 @@ function animateHumanoid(model, speed, dt, grounded, running) {
   limbs.foreArmL.rotation.x = -swing * 0.22;
   limbs.foreArmR.rotation.x = swing * 0.22;
 
-  // 空中では手足を少し戻し、空中姿勢を表現します。
   if (!grounded) {
     limbs.thighL.rotation.x = 0.16;
     limbs.thighR.rotation.x = 0.16;
@@ -402,13 +394,8 @@ function updateNPCs(dt) {
     const p = npc.body.translation();
     if (npc.thinkTimer <= 0 || npc.target.distanceToSquared(new THREE.Vector3(p.x, 0, p.z)) < 2.2) {
       npc.thinkTimer = CONFIG.npcThinkInterval + Math.random() * 0.7;
-      npc.target.set(
-        p.x + (Math.random() - 0.5) * 22,
-        0,
-        p.z + (Math.random() - 0.5) * 22
-      );
+      npc.target.set(p.x + (Math.random() - 0.5) * 22, 0, p.z + (Math.random() - 0.5) * 22);
     }
-
     const dx = npc.target.x - p.x;
     const dz = npc.target.z - p.z;
     const len = Math.hypot(dx, dz);
@@ -423,7 +410,6 @@ function updateNPCs(dt) {
       y: 0,
       z: THREE.MathUtils.clamp(desiredZ - v.z, -limit, limit) * mass
     }, true);
-
     if (speed > 0.2) {
       npc.model.rotation.y = THREE.MathUtils.lerpAngle(npc.model.rotation.y, Math.atan2(dx, dz), 1 - Math.exp(-8 * dt));
     }
@@ -432,7 +418,7 @@ function updateNPCs(dt) {
 }
 
 function updateCamera(dt) {
-  // 矢印キーは移動と同時に押しても成立するよう、カメラ入力としても独立処理します。
+  // 矢印キーは移動入力と独立してカメラにも使えます。
   if (down("ArrowLeft")) cameraYaw += CONFIG.cameraYawSpeed * dt;
   if (down("ArrowRight")) cameraYaw -= CONFIG.cameraYawSpeed * dt;
   if (down("ArrowUp")) cameraPitch += CONFIG.cameraPitchSpeed * dt;
@@ -448,7 +434,6 @@ function updateCamera(dt) {
     p.z + Math.cos(cameraYaw) * horizontal
   );
 
-  // カメラとプレイヤーの間に地形があれば、カメラを手前へ寄せて地面へのめり込みを防ぎます。
   const origin = { x: target.x, y: target.y, z: target.z };
   const direction = { x: desired.x - target.x, y: desired.y - target.y, z: desired.z - target.z };
   const length = Math.hypot(direction.x, direction.y, direction.z);
@@ -457,7 +442,7 @@ function updateCamera(dt) {
     direction.y /= length;
     direction.z /= length;
     const ray = new RAPIER.Ray(origin, direction);
-    const hit = physicsWorld.castRay(ray, length, true);
+    const hit = physicsWorld.castRay(ray, length, true, undefined, undefined, playerCollider.handle);
     if (hit && hit.toi < length) {
       const safeLength = Math.max(0.8, hit.toi - CONFIG.cameraCollisionPadding);
       desired.set(
@@ -489,7 +474,6 @@ function updateSun(dt) {
   sunLight.position.copy(sunMesh.position);
   sunLight.target.position.set(0, 0, 0);
 
-  // 高度から昼夜を連続的に作ります。夜間は太陽光を完全な0にはせず、ごく弱く残します。
   const daylight = THREE.MathUtils.smoothstep(altitude, -0.12, 0.18);
   sunLight.intensity = 0.04 + CONFIG.sunIntensity * daylight;
   hemiLight.intensity = THREE.MathUtils.lerp(CONFIG.ambientNightIntensity, CONFIG.ambientDayIntensity, daylight);
@@ -506,7 +490,6 @@ function syncVisuals() {
   // ここで初めて物理結果をThree.jsへ反映します。物理→内部状態→表示の一方向です。
   const p = playerBody.translation();
   playerModel.position.set(p.x, p.y - 1.10, p.z);
-
   for (const npc of npcs) {
     const n = npc.body.translation();
     npc.model.position.set(n.x, n.y - 1.02, n.z);
@@ -540,7 +523,6 @@ async function boot() {
     loading.hidden = true;
     document.getElementById("hud").hidden = false;
     document.getElementById("status").textContent = "WORLD ONLINE // PLAYER PHYSICS ONLINE";
-
     clock.start();
     requestAnimationFrame(frame);
   } catch (err) {
@@ -554,17 +536,12 @@ async function boot() {
 function frame() {
   requestAnimationFrame(frame);
   const dt = Math.min(clock.getDelta(), 0.05);
-
   updatePlayer(dt);
   updateNPCs(dt);
   updateSun(dt);
-
-  // Rapierを進めたあと、物理状態を表示へ同期します。
-  // これが#6の「内部情報と見た目の情報を丁重に扱う」ための中心部分です。
   physicsWorld.step();
   syncVisuals();
   updateCamera(dt);
-
   renderer.render(scene, camera);
 }
 
