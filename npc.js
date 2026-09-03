@@ -1,17 +1,19 @@
 /*
  * NPC担当。
  *
- * NPCの生成・徘徊AI・移動・向き・アニメーション更新をgame.jsから独立させます。
- * game.jsはNPCの細かな判断を持たず、NPCマネージャーへ時間経過を渡すだけにします。
- *
+ * NPCの生成・AI・移動・向き・アニメーション更新をgame.jsから独立させます。
  * NPCの物理位置はRapierを正とし、Three.jsモデルは毎フレームその位置へ同期します。
+ *
+ * このファイルでは「ただランダムに歩く」状態から一段進めて、
+ * 個体差・加減速・障害物回避・他NPC回避・プレイヤーへの反応を扱います。
  */
 
 import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js";
-import { createDynamicCapsule } from "./physics.js";
+import { createDynamicCapsule, RAPIER } from "./physics.js";
 
-export function createNPCManager({ scene, config, terrainHeightAt, mapState, createModel }) {
+export function createNPCManager({ scene, config, terrainHeightAt, mapState, createModel, animateModel, physicsWorld, playerBody }) {
   const npcs = [];
+  const nearbyScratch = new THREE.Vector3();
 
   function createNPC(index) {
     const angle = index / config.npcCount * Math.PI * 2;
@@ -44,15 +46,38 @@ export function createNPCManager({ scene, config, terrainHeightAt, mapState, cre
       target: new THREE.Vector3(x, 0, z),
       thinkTimer: Math.random() * config.npcThinkInterval,
       phase: Math.random() * Math.PI * 2,
-      speed: config.npcWalkSpeed * (0.9 + Math.random() * 0.25)
+      speed: config.npcWalkSpeed * (0.88 + Math.random() * 0.28),
+      acceleration: 5.5 + Math.random() * 2.5,
+      turnRate: 3.5 + Math.random() * 2.5,
+      preferredDistance: 4.0 + Math.random() * 3.0,
+      wanderBias: Math.random() * Math.PI * 2,
+      state: "WANDER",
+      stateTimer: 0,
+      lastDirection: new THREE.Vector3(0, 0, 1)
     });
   }
 
+  function targetIsSafe(x, z, originX, originZ) {
+    if (Math.hypot(x - originX, z - originZ) < 3.0) return false;
+    if (mapState?.isWaterAt(x, z)) return false;
+
+    // 地形の高低差が大きすぎる目的地は避け、急斜面への突入を減らします。
+    const center = terrainHeightAt(x, z);
+    const samples = [
+      terrainHeightAt(x + 1.5, z),
+      terrainHeightAt(x - 1.5, z),
+      terrainHeightAt(x, z + 1.5),
+      terrainHeightAt(x, z - 1.5)
+    ];
+    const maxSlope = Math.max(...samples.map((height) => Math.abs(height - center)));
+    return maxSlope < 1.45;
+  }
+
   function chooseTarget(npc, position) {
-    // 水域には不用意に入り込ませず、陸地側から次の移動先を選びます。
-    for (let attempt = 0; attempt < 8; attempt++) {
+    // 近い範囲から複数候補を試し、湖・急斜面・極端に近い地点を避けます。
+    for (let attempt = 0; attempt < 14; attempt++) {
       const angle = Math.random() * Math.PI * 2;
-      const radius = 7 + Math.random() * 16;
+      const radius = 6 + Math.random() * 18;
       const x = THREE.MathUtils.clamp(
         position.x + Math.cos(angle) * radius,
         -config.worldSize * 0.46,
@@ -64,23 +89,101 @@ export function createNPCManager({ scene, config, terrainHeightAt, mapState, cre
         config.worldSize * 0.46
       );
 
-      if (!mapState?.isWaterAt(x, z)) {
+      if (targetIsSafe(x, z, position.x, position.z)) {
         npc.target.set(x, 0, z);
+        npc.wanderBias = angle;
         return;
       }
     }
+
+    // 候補が全滅した場合は、現在位置の少し先へ退避させます。
+    const angle = npc.wanderBias + (Math.random() - 0.5) * 1.4;
+    npc.target.set(
+      THREE.MathUtils.clamp(position.x + Math.cos(angle) * 6, -config.worldSize * 0.46, config.worldSize * 0.46),
+      0,
+      THREE.MathUtils.clamp(position.z + Math.sin(angle) * 6, -config.worldSize * 0.46, config.worldSize * 0.46)
+    );
+  }
+
+  function applyAvoidance(npc, position, direction) {
+    const avoidance = nearbyScratch.set(0, 0, 0);
+
+    // NPC同士が密集した場合は、近い個体から離れる方向へ補正します。
+    for (const other of npcs) {
+      if (other === npc) continue;
+      const otherPosition = other.body.translation();
+      const dx = position.x - otherPosition.x;
+      const dz = position.z - otherPosition.z;
+      const distanceSq = dx * dx + dz * dz;
+      if (distanceSq > 16 || distanceSq < 0.0001) continue;
+
+      const distance = Math.sqrt(distanceSq);
+      const strength = (4 - distance) / 4;
+      avoidance.x += (dx / distance) * strength;
+      avoidance.z += (dz / distance) * strength;
+    }
+
+    // プレイヤーへ近づきすぎたNPCは、会話ではなく行動として距離を取ります。
+    if (playerBody) {
+      const playerPosition = playerBody.translation();
+      const dx = position.x - playerPosition.x;
+      const dz = position.z - playerPosition.z;
+      const distanceSq = dx * dx + dz * dz;
+      if (distanceSq < 36 && distanceSq > 0.0001) {
+        const distance = Math.sqrt(distanceSq);
+        const strength = (6 - distance) / 6;
+        avoidance.x += (dx / distance) * strength * 1.7;
+        avoidance.z += (dz / distance) * strength * 1.7;
+        if (distance < 3.0) npc.state = "FLEE";
+      }
+    }
+
+    if (avoidance.lengthSq() > 0.001) {
+      avoidance.normalize();
+      direction.lerp(avoidance, Math.min(0.72, avoidance.length() + 0.18)).normalize();
+    }
+  }
+
+  function obstacleAvoidance(npc, position, direction) {
+    if (!physicsWorld) return;
+
+    // 前方を短いRayで確認し、岩などの固定コリジョンへ正面衝突し続けないようにします。
+    const origin = { x: position.x, y: position.y - 0.35, z: position.z };
+    const ray = new RAPIER.Ray(origin, { x: direction.x, y: 0, z: direction.z });
+    const hit = physicsWorld.castRay(ray, 2.4, true, undefined, undefined, npc.collider.handle);
+    if (!hit) return;
+
+    const side = Math.random() < 0.5 ? -1 : 1;
+    const steer = new THREE.Vector3(-direction.z * side, 0, direction.x * side);
+    direction.lerp(steer, 0.75).normalize();
+    npc.state = "AVOID";
   }
 
   function updateNPC(npc, dt) {
     npc.thinkTimer -= dt;
-    const position = npc.body.translation();
+    npc.stateTimer -= dt;
 
-    if (
-      npc.thinkTimer <= 0 ||
-      Math.hypot(position.x - npc.target.x, position.z - npc.target.z) < 1.8
-    ) {
-      npc.thinkTimer = 0.45 + Math.random() * 0.6;
-      chooseTarget(npc, position);
+    const position = npc.body.translation();
+    const targetDistance = Math.hypot(position.x - npc.target.x, position.z - npc.target.z);
+
+    if (npc.state === "FLEE" && npc.stateTimer <= 0) {
+      npc.stateTimer = 1.2 + Math.random() * 1.2;
+      const playerPosition = playerBody?.translation();
+      if (playerPosition) {
+        const away = new THREE.Vector3(position.x - playerPosition.x, 0, position.z - playerPosition.z);
+        if (away.lengthSq() > 0.01) away.normalize();
+        npc.target.set(
+          THREE.MathUtils.clamp(position.x + away.x * (8 + Math.random() * 8), -config.worldSize * 0.46, config.worldSize * 0.46),
+          0,
+          THREE.MathUtils.clamp(position.z + away.z * (8 + Math.random() * 8), -config.worldSize * 0.46, config.worldSize * 0.46)
+        );
+      }
+    }
+
+    if (npc.thinkTimer <= 0 || targetDistance < 1.7) {
+      npc.thinkTimer = 0.35 + Math.random() * 0.65;
+      if (npc.state !== "FLEE") npc.state = "WANDER";
+      if (npc.state === "WANDER") chooseTarget(npc, position);
     }
 
     const direction = new THREE.Vector3(
@@ -88,43 +191,51 @@ export function createNPCManager({ scene, config, terrainHeightAt, mapState, cre
       0,
       npc.target.z - position.z
     );
-
     if (direction.lengthSq() > 0.01) direction.normalize();
+    else direction.copy(npc.lastDirection);
 
+    applyAvoidance(npc, position, direction);
+    obstacleAvoidance(npc, position, direction);
+    npc.lastDirection.lerp(direction, 1 - Math.exp(-npc.turnRate * dt)).normalize();
+
+    const targetSpeed = npc.state === "FLEE" ? npc.speed * 1.45 : npc.speed;
+    const targetVX = npc.lastDirection.x * targetSpeed;
+    const targetVZ = npc.lastDirection.z * targetSpeed;
     const velocity = npc.body.linvel();
-    const targetVX = direction.x * npc.speed;
-    const targetVZ = direction.z * npc.speed;
-    const changeX = THREE.MathUtils.clamp(targetVX - velocity.x, -8 * dt, 8 * dt);
-    const changeZ = THREE.MathUtils.clamp(targetVZ - velocity.z, -8 * dt, 8 * dt);
 
-    // 直接座標を書き換えず、Rapierへ速度変化に相当するImpulseを与えます。
+    // 速度を一気に設定せず、現在速度から目標速度へ加減速させます。
+    const acceleration = npc.state === "AVOID" ? npc.acceleration * 1.35 : npc.acceleration;
+    const maxChange = acceleration * dt;
+    const changeX = THREE.MathUtils.clamp(targetVX - velocity.x, -maxChange, maxChange);
+    const changeZ = THREE.MathUtils.clamp(targetVZ - velocity.z, -maxChange, maxChange);
     npc.body.applyImpulse({ x: changeX * 65, y: 0, z: changeZ * 65 }, true);
 
-    if (direction.lengthSq() > 0.01) {
-      const angle = Math.atan2(direction.x, direction.z);
+    // 移動方向へ身体を自然に向けます。
+    if (npc.lastDirection.lengthSq() > 0.01) {
+      const angle = Math.atan2(npc.lastDirection.x, npc.lastDirection.z);
       npc.model.rotation.y = THREE.MathUtils.lerpAngle(
         npc.model.rotation.y,
         angle,
-        1 - Math.exp(-8 * dt)
+        1 - Math.exp(-npc.turnRate * dt)
       );
     }
 
-    // NPCはプレイヤーと同じ人型構造を使い、速度に応じて歩行アニメーションを変えます。
-    const limbs = npc.model.userData.limbs;
-    const speed = Math.hypot(velocity.x, velocity.z);
-    const moving = speed > 0.2;
-    npc.phase += dt * (moving ? 6.0 + speed * 0.8 : 1.5);
-    const swing = moving ? Math.sin(npc.phase) * 0.5 * Math.min(speed / config.runSpeed, 1) : 0;
-    const opposite = Math.sin(npc.phase + Math.PI) * 0.5 * Math.min(speed / config.runSpeed, 1);
+    const horizontalSpeed = Math.hypot(velocity.x, velocity.z);
+    const moving = horizontalSpeed > 0.18;
+    npc.phase += dt * (moving ? 6.0 + horizontalSpeed * 0.8 : 1.5);
 
-    limbs.thighL.rotation.x = swing;
-    limbs.thighR.rotation.x = opposite;
-    limbs.shinL.rotation.x = Math.max(0, -swing) * 0.5;
-    limbs.shinR.rotation.x = Math.max(0, -opposite) * 0.5;
-    limbs.upperArmL.rotation.x = opposite * 0.72;
-    limbs.upperArmR.rotation.x = swing * 0.72;
-    limbs.foreArmL.rotation.x = -opposite * 0.25;
-    limbs.foreArmR.rotation.x = -swing * 0.25;
+    // 歩行アニメーションはnpc.jsから共通アニメーション関数へ渡します。
+    if (animateModel) {
+      animateModel(npc.model, horizontalSpeed, true, false, dt, false);
+    } else {
+      const limbs = npc.model.userData.limbs;
+      const swing = moving ? Math.sin(npc.phase) * 0.42 : 0;
+      const opposite = -swing;
+      limbs.thighL.rotation.x = swing;
+      limbs.thighR.rotation.x = opposite;
+      limbs.upperArmL.rotation.x = opposite * 0.7;
+      limbs.upperArmR.rotation.x = swing * 0.7;
+    }
   }
 
   function update(dt) {
