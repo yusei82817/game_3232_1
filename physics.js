@@ -17,10 +17,10 @@ let world = null;
 
 /**
  * Rapierを初期化し、gravity.jsへ標準重力の設定を委譲します。
- * 空のオプションオブジェクトを渡すことで、Rapierの旧式初期化引数の警告を避けます。
+ * Rapier 0.19.xのcompat版では、初期化オプションを渡さずに呼び出します。
  */
 export async function initPhysics() {
-  await RAPIER.init({});
+  await RAPIER.init();
   world = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
   configureGravity(world, -9.81);
   return world;
