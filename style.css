@@ -25,6 +25,18 @@ canvas { display: block; width: 100%; height: 100%; }
   font-size: 14px;
 }
 
+/*
+ * HTMLのhidden属性を確実に優先させます。
+ * #loading/#errorにはdisplay:gridが指定されているため、通常のブラウザ標準の
+ * [hidden] { display:none } より優先されてしまいます。
+ * これがないとゲームが正常に起動していても黒いローディング画面が残ります。
+ */
+#loading[hidden],
+#error[hidden],
+#hud[hidden] {
+  display: none !important;
+}
+
 #error {
   padding: 24px;
   color: #ffb7b7;
