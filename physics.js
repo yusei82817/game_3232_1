@@ -17,9 +17,10 @@ let world = null;
 
 /**
  * Rapierを初期化し、gravity.jsへ標準重力の設定を委譲します。
+ * 空のオプションオブジェクトを渡すことで、Rapierの旧式初期化引数の警告を避けます。
  */
 export async function initPhysics() {
-  await RAPIER.init();
+  await RAPIER.init({});
   world = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
   configureGravity(world, -9.81);
   return world;
@@ -53,7 +54,8 @@ export function createDynamicCapsule({ x, y, z, radius, halfHeight, mass, fricti
 }
 
 export function createFixedHeightfield({ rows, cols, heights, scale }) {
-  // Three.jsと同じ高さ配列を使うことで、表示メッシュと衝突面を一致させます。
+  // Rapierのheightfieldは「頂点数」ではなく分割数を受け取ります。
+  // Three.js側はsegments+1個の頂点を作るため、rows/colsにはsegmentsを渡します。
   const rapierScale = new RAPIER.Vector3(scale.x, scale.y, scale.z);
   return world.createCollider(
     RAPIER.ColliderDesc.heightfield(rows, cols, heights, rapierScale)
