@@ -12,6 +12,15 @@
 import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js";
 import { createDynamicCapsule, applyHorizontalSpeed, raycastTouch } from "./physics.js";
 
+// Three.js r180にはMathUtils.lerpAngleが存在しないため、
+// 角度差を-π～πへ折り返してから補間します。これにより359°→1°のような境界でも、
+// ほぼ1回転してしまうことなく最短方向へ自然に旋回できます。
+function lerpAngle(current, target, alpha) {
+  const twoPi = Math.PI * 2;
+  const delta = THREE.MathUtils.euclideanModulo(target - current + Math.PI, twoPi) - Math.PI;
+  return current + delta * alpha;
+}
+
 export function createNPCManager({ scene, config, terrainHeightAt, mapState, createModel, animateModel, physicsWorld, playerBody }) {
   const npcs = [];
   const nearbyScratch = new THREE.Vector3();
@@ -221,7 +230,7 @@ export function createNPCManager({ scene, config, terrainHeightAt, mapState, cre
     // 移動方向へ身体を自然に向けます。
     if (npc.lastDirection.lengthSq() > 0.01) {
       const angle = Math.atan2(npc.lastDirection.x, npc.lastDirection.z);
-      npc.model.rotation.y = THREE.MathUtils.lerpAngle(
+      npc.model.rotation.y = lerpAngle(
         npc.model.rotation.y,
         angle,
         1 - Math.exp(-npc.turnRate * dt)
