@@ -171,8 +171,12 @@ function resize() {
 
 async function boot() {
   try {
-    physicsWorld = await initPhysics();
+    // Three.jsのScene・Camera・Rendererを先に作ります。
+    // Rapier初期化中に処理が止まっても、画面そのものが完全な黒画面にならないようにします。
     setupScene();
+
+    // 表示環境を作った後でRapierを初期化します。
+    physicsWorld = await initPhysics();
 
     fieldController = createFieldController({
       scene,
