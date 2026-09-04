@@ -98,10 +98,11 @@ function buildTerrain(scene, config, terrainHeightAt) {
   mesh.receiveShadow = true;
   scene.add(mesh);
 
-  // 表示と物理で同じheight配列を使い、足元の見た目と衝突面を一致させます。
+  // Rapierはsegmentsを分割数として受け取り、height配列はsegments+1頂点分を使用します。
+  // Three.jsと同じheight配列を使うことで、表示メッシュと衝突面を一致させます。
   createFixedHeightfield({
-    rows: segments + 1,
-    cols: segments + 1,
+    rows: segments,
+    cols: segments,
     heights,
     scale: { x: size / segments, y: 1, z: size / segments }
   });
