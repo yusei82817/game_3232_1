@@ -6,7 +6,7 @@
  * 実際の衝突解決はRapier自身に任せ、このモジュールは「接触状態を読む」ことに専念します。
  */
 
-import { RAPIER } from "./physics.js";
+import RAPIER from "https://cdn.jsdelivr.net/npm/@dimforge/rapier3d-compat@0.19.0/+esm";
 
 /**
  * Bodyの足元から下方向へRayを飛ばし、地面へ接触しているかを調べます。
