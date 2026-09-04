@@ -15,9 +15,6 @@ import { isGrounded, groundDistance, castTouchRay } from "./touch.js";
 
 let world = null;
 
-/**
- * Rapierを初期化し、gravity.jsへ標準重力の設定を委譲します。
- */
 export async function initPhysics() {
   await RAPIER.init();
   world = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
@@ -32,7 +29,7 @@ export function getWorld() {
 
 /**
  * 動的カプセルを生成します。
- * CCDを有効にして高速移動時の地面すり抜けを防ぎます。
+ * CCDを有効にして、高速移動時にも地形をすり抜けにくくします。
  */
 export function createDynamicCapsule({ x, y, z, radius, halfHeight, mass, friction = 0.8, damping = 1.0 }) {
   const body = world.createRigidBody(
@@ -53,8 +50,24 @@ export function createDynamicCapsule({ x, y, z, radius, halfHeight, mass, fricti
   return { body, collider };
 }
 
+/**
+ * Three.jsの地形と同じ頂点・三角形から固定Meshコリジョンを作ります。
+ * 表示メッシュと同じデータを使うので、地面の見た目と物理面を一致させられます。
+ */
+export function createFixedTrimesh({ vertices, indices }) {
+  const vertexData = vertices instanceof Float32Array ? vertices : new Float32Array(vertices);
+  const indexData = indices instanceof Uint32Array ? indices : new Uint32Array(indices);
+  return world.createCollider(
+    RAPIER.ColliderDesc.trimesh(vertexData, indexData)
+      .setFriction(0.9)
+      .setRestitution(0)
+  );
+}
+
+/**
+ * Heightfield生成API。別の地形で利用できるよう残しています。
+ */
 export function createFixedHeightfield({ rows, cols, heights, scale }) {
-  // Rapierのheightfieldは分割数を受け取り、height配列は分割数+1の頂点を使用します。
   const rapierScale = new RAPIER.Vector3(scale.x, scale.y, scale.z);
   return world.createCollider(
     RAPIER.ColliderDesc.heightfield(rows, cols, heights, rapierScale)
@@ -106,9 +119,7 @@ export function raycastTouch(origin, direction, maxToi, excludeColliderHandle = 
   return castTouchRay(world, origin, direction, maxToi, excludeColliderHandle);
 }
 
-/**
- * Rapierの物理シミュレーションを1ステップ進めます。
- */
+/** Rapierの物理シミュレーションを1ステップ進めます。 */
 export function stepPhysics() {
   world.step();
 }
