@@ -4,14 +4,12 @@
  * 地形の見た目、地形コリジョン、水域、自然物をここでまとめて生成します。
  * game.jsは「ゲーム進行」、physics.jsは「物理API」、map.jsは「世界の地形」を担当します。
  *
- * 重要なのは、Three.js用の高さ配列とRapier用の高さ配列を同じデータから作ることです。
- * これにより、見た目の地面と実際に歩ける地面の位置がずれません。
- * 水面は地面とは別物です。水面そのものに歩行用コリジョンを付けず、
- * game.js側で水中状態を判定して泳ぎ・減速・浮力を処理します。
+ * 重要なのは、Three.js用の頂点・三角形とRapier用のコリジョンを同じデータから作ることです。
+ * これにより、見た目の地面と実際に歩ける地面の位置を一致させます。
  */
 
 import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js";
-import { createFixedHeightfield, createFixedBall } from "./physics.js";
+import { createFixedTrimesh, createFixedBall } from "./physics.js";
 
 function makeMaterial(color, roughness = 0.86) {
   return new THREE.MeshStandardMaterial({ color, roughness, metalness: 0.04 });
@@ -19,7 +17,6 @@ function makeMaterial(color, roughness = 0.86) {
 
 function createTerrainHeightFunction() {
   return (x, z) => {
-    // 大きな起伏 + 細かな起伏 + 尾根を組み合わせて、平坦すぎない荒野を作ります。
     const natural =
       Math.sin(x * 0.045) * 2.2 +
       Math.cos(z * 0.052) * 1.6 +
@@ -27,8 +24,6 @@ function createTerrainHeightFunction() {
       Math.cos((x - z) * 0.075) * 0.45 +
       Math.max(0, Math.sin(x * 0.018 + z * 0.031)) * 1.3 - 0.6;
 
-    // 湖の中央だけをなだらかに掘り下げます。
-    // waterLevelより十分低い海底を作ることで、水面と地面が同じ高さになる問題を防ぎます。
     const lake = getLakeShape(x, z);
     if (lake <= 0) return natural;
 
@@ -54,7 +49,6 @@ function getLakeShape(x, z) {
   const dx = (x - CONFIG_INTERNAL.lakeCenterX) / CONFIG_INTERNAL.lakeRadiusX;
   const dz = (z - CONFIG_INTERNAL.lakeCenterZ) / CONFIG_INTERNAL.lakeRadiusZ;
   const distance = Math.hypot(dx, dz);
-  // 0.78より内側は完全な水域、1.0付近でなだらかに岸へ移行します。
   return THREE.MathUtils.clamp((1.0 - distance) / 0.22, 0, 1);
 }
 
@@ -98,14 +92,9 @@ function buildTerrain(scene, config, terrainHeightAt) {
   mesh.receiveShadow = true;
   scene.add(mesh);
 
-  // Rapierはsegmentsを分割数として受け取り、height配列はsegments+1頂点分を使用します。
-  // Three.jsと同じheight配列を使うことで、表示メッシュと衝突面を一致させます。
-  createFixedHeightfield({
-    rows: segments,
-    cols: segments,
-    heights,
-    scale: { x: size / segments, y: 1, z: size / segments }
-  });
+  // 表示メッシュとまったく同じ頂点・三角形をRapierへ渡します。
+  // これを別計算にすると、見た目の地面と衝突面がずれてしまいます。
+  createFixedTrimesh({ vertices: positions, indices });
 
   return { mesh, heights };
 }
@@ -116,8 +105,6 @@ function buildWater(scene) {
   const positions = new Float32Array(count * count * 3);
   const indices = [];
 
-  // 楕円状の湖面をグリッド化し、湖の外側は頂点を透明化するのではなく三角形自体を作りません。
-  // そのため巨大な水面Planeが荒野全体を覆うことはありません。
   for (let iz = 0; iz <= segments; iz++) {
     for (let ix = 0; ix <= segments; ix++) {
       const u = ix / segments * 2 - 1;
@@ -159,7 +146,6 @@ function buildWater(scene) {
   mesh.receiveShadow = true;
   scene.add(mesh);
 
-  // 波の更新に必要な元座標を保存します。毎フレーム全頂点を大きく動かさず、穏やかに揺らします。
   mesh.userData.waterBasePositions = positions.slice();
   mesh.userData.waterTime = 0;
   mesh.userData.updateWater = (dt) => {
@@ -198,7 +184,6 @@ function addRock(scene, terrainHeightAt, x, z, scale = 1) {
 }
 
 function buildNaturalObjects(scene, config, terrainHeightAt) {
-  // 岩はマップの固定自然物です。プレイヤーの初期位置付近を避けて配置します。
   const rocks = [
     [-18, -12, 1.25], [15, -17, 0.9], [29, 7, 1.5], [-34, 18, 1.15],
     [42, 28, 0.8], [-48, -31, 1.4], [8, 39, 1.0], [-7, -43, 0.75],
@@ -210,7 +195,6 @@ function buildNaturalObjects(scene, config, terrainHeightAt) {
     addRock(scene, terrainHeightAt, x, z, scale);
   }
 
-  // 追加の小石は決定的な座標で散らし、毎回同じマップになるようにします。
   for (let i = 0; i < Math.min(28, Math.floor(config.worldSize / 5)); i++) {
     const angle = i * 2.399963;
     const radius = 18 + (i * 17.37) % (config.worldSize * 0.43);
@@ -223,7 +207,6 @@ function buildNaturalObjects(scene, config, terrainHeightAt) {
 }
 
 export function buildMap(scene, config) {
-  // terrainHeightAtを返し、プレイヤーやNPCの初期位置計算にも同じ地形関数を使えるようにします。
   const terrainHeightAt = createTerrainHeightFunction();
   const terrain = buildTerrain(scene, config, terrainHeightAt);
   const waterMesh = buildWater(scene);
