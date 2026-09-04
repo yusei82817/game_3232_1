@@ -6,10 +6,11 @@
  *
  * このファイルでは「ただランダムに歩く」状態から一段進めて、
  * 個体差・加減速・障害物回避・他NPC回避・プレイヤーへの反応を扱います。
+ * 速度計算と接触Rayはphysics.jsを司令塔として利用します。
  */
 
 import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js";
-import { createDynamicCapsule, RAPIER } from "./physics.js";
+import { createDynamicCapsule, applyHorizontalSpeed, raycastTouch } from "./physics.js";
 
 export function createNPCManager({ scene, config, terrainHeightAt, mapState, createModel, animateModel, physicsWorld, playerBody }) {
   const npcs = [];
@@ -149,8 +150,12 @@ export function createNPCManager({ scene, config, terrainHeightAt, mapState, cre
 
     // 前方を短いRayで確認し、岩などの固定コリジョンへ正面衝突し続けないようにします。
     const origin = { x: position.x, y: position.y - 0.35, z: position.z };
-    const ray = new RAPIER.Ray(origin, { x: direction.x, y: 0, z: direction.z });
-    const hit = physicsWorld.castRay(ray, 2.4, true, undefined, undefined, npc.collider.handle);
+    const hit = raycastTouch(
+      origin,
+      { x: direction.x, y: 0, z: direction.z },
+      2.4,
+      npc.collider.handle
+    );
     if (!hit) return;
 
     const side = Math.random() < 0.5 ? -1 : 1;
@@ -201,14 +206,17 @@ export function createNPCManager({ scene, config, terrainHeightAt, mapState, cre
     const targetSpeed = npc.state === "FLEE" ? npc.speed * 1.45 : npc.speed;
     const targetVX = npc.lastDirection.x * targetSpeed;
     const targetVZ = npc.lastDirection.z * targetSpeed;
-    const velocity = npc.body.linvel();
-
-    // 速度を一気に設定せず、現在速度から目標速度へ加減速させます。
     const acceleration = npc.state === "AVOID" ? npc.acceleration * 1.35 : npc.acceleration;
-    const maxChange = acceleration * dt;
-    const changeX = THREE.MathUtils.clamp(targetVX - velocity.x, -maxChange, maxChange);
-    const changeZ = THREE.MathUtils.clamp(targetVZ - velocity.z, -maxChange, maxChange);
-    npc.body.applyImpulse({ x: changeX * 65, y: 0, z: changeZ * 65 }, true);
+
+    // 速度計算はspeed.jsへphysics.js経由で委譲し、RapierへImpulseを適用します。
+    applyHorizontalSpeed(npc.body, {
+      targetX: targetVX,
+      targetZ: targetVZ,
+      acceleration,
+      braking: acceleration,
+      mass: 65,
+      dt
+    });
 
     // 移動方向へ身体を自然に向けます。
     if (npc.lastDirection.lengthSq() > 0.01) {
@@ -220,6 +228,7 @@ export function createNPCManager({ scene, config, terrainHeightAt, mapState, cre
       );
     }
 
+    const velocity = npc.body.linvel();
     const horizontalSpeed = Math.hypot(velocity.x, velocity.z);
     const moving = horizontalSpeed > 0.18;
     npc.phase += dt * (moving ? 6.0 + horizontalSpeed * 0.8 : 1.5);
