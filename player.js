@@ -4,10 +4,19 @@
  * プレイヤー専用の処理をgame.jsから分離したモジュールです。
  * Rapierが内部の物理状態を管理し、このモジュールはその状態に対して
  * 移動・ジャンプ・水中挙動を適用し、Three.jsのモデルへ見た目を反映します。
+ *
+ * 物理計算そのものはphysics.jsを司令塔として利用し、gravity.js・speed.js・touch.jsへ分担します。
  */
 
 import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js";
-import { createDynamicCapsule, RAPIER } from "./physics.js";
+import {
+  createDynamicCapsule,
+  applyHorizontalSpeed,
+  applyWaterSpeedDrag,
+  applyWaterBuoyancy,
+  dampWaterFall,
+  checkGrounded
+} from "./physics.js";
 import { animateHumanoid } from "./animation.js";
 
 const tmpForward = new THREE.Vector3();
@@ -45,23 +54,10 @@ export function createPlayerController({
   }
 
   function isGrounded() {
-    const translation = playerBody.translation();
-    const velocity = playerBody.linvel();
-    if (velocity.y > 1.0) return false;
-
-    const ray = new RAPIER.Ray(
-      { x: translation.x, y: translation.y - config.playerHalfHeight, z: translation.z },
-      { x: 0, y: -1, z: 0 }
-    );
-    const hit = physicsWorld.castRay(
-      ray,
-      config.groundProbeLength,
-      true,
-      undefined,
-      undefined,
-      playerCollider.handle
-    );
-    return hit !== null;
+    return checkGrounded(playerBody, playerCollider, {
+      halfHeight: config.playerHalfHeight,
+      probeLength: config.groundProbeLength
+    });
   }
 
   function getWaterInfo() {
@@ -85,7 +81,6 @@ export function createPlayerController({
     }
 
     const position = playerBody.translation();
-    const velocity = playerBody.linvel();
     const capsuleBottom = position.y - config.playerHalfHeight;
     const capsuleHeight = config.playerHalfHeight * 2;
     const submerged = THREE.MathUtils.clamp(
@@ -101,18 +96,18 @@ export function createPlayerController({
       return;
     }
 
-    const buoyancyImpulse = config.playerMass * 9.81 * config.waterBuoyancy * submerged * dt;
-    playerBody.applyImpulse({ x: 0, y: buoyancyImpulse, z: 0 }, true);
-
-    if (velocity.y < -1.8) {
-      playerBody.setLinvel({
-        x: velocity.x,
-        y: velocity.y * 0.72,
-        z: velocity.z
-      }, true);
-    }
+    // 浮力はgravity.js、水による水平抵抗はspeed.jsへphysics.js経由で委譲します。
+    applyWaterBuoyancy(playerBody, {
+      mass: config.playerMass,
+      submerged,
+      buoyancy: config.waterBuoyancy,
+      gravityMagnitude: 9.81,
+      dt
+    });
+    dampWaterFall(playerBody);
 
     if (isDown("Space")) {
+      const velocity = playerBody.linvel();
       const verticalDelta = config.swimUpSpeed - velocity.y;
       const change = THREE.MathUtils.clamp(verticalDelta, -2.0, 2.0) * dt;
       playerBody.applyImpulse({
@@ -122,13 +117,11 @@ export function createPlayerController({
       }, true);
     }
 
-    const drag = Math.max(0, 1 - 2.2 * submerged * dt);
-    const currentVelocity = playerBody.linvel();
-    playerBody.setLinvel({
-      x: velocity.x * drag,
-      y: currentVelocity.y,
-      z: velocity.z * drag
-    }, true);
+    applyWaterSpeedDrag(playerBody, {
+      submerged,
+      drag: 2.2,
+      dt
+    });
 
     playerModel.userData.inWater = true;
     playerModel.userData.submerged = submerged;
@@ -153,17 +146,16 @@ export function createPlayerController({
       ? config.swimAcceleration
       : (grounded ? config.groundAcceleration : config.airAcceleration);
     const braking = inWater ? config.swimBraking : config.groundBraking;
-    const hasInput = move.lengthSq() > 0.001;
-    const rate = hasInput ? acceleration : braking;
-    const maxChange = rate * dt;
-    const changeX = THREE.MathUtils.clamp(targetVX - velocity.x, -maxChange, maxChange);
-    const changeZ = THREE.MathUtils.clamp(targetVZ - velocity.z, -maxChange, maxChange);
 
-    playerBody.applyImpulse({
-      x: changeX * config.playerMass,
-      y: 0,
-      z: changeZ * config.playerMass
-    }, true);
+    // speed.jsへ速度差からの加速・減速を委譲します。
+    applyHorizontalSpeed(playerBody, {
+      targetX: targetVX,
+      targetZ: targetVZ,
+      acceleration,
+      braking,
+      mass: config.playerMass,
+      dt
+    });
 
     if (!inWater && isDown("Space") && grounded && !jumpLatch) {
       const currentVelocity = playerBody.linvel();
@@ -178,9 +170,11 @@ export function createPlayerController({
 
     applyWaterPhysics(dt, waterInfo);
 
+    // アニメーションにはこのフレームで計算された現在速度を渡します。
+    const currentVelocity = playerBody.linvel();
     animateHumanoid(
       playerModel,
-      Math.hypot(velocity.x, velocity.z),
+      Math.hypot(currentVelocity.x, currentVelocity.z),
       grounded,
       running,
       dt,
