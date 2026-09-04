@@ -2,12 +2,12 @@
  * WASTELAND // FIELD TEST
  *
  * ゲーム全体の初期化と描画ループ、各システムの接続を担当します。
- * physics.jsは物理、map.jsはマップ、npc.jsはNPC、camera.jsはカメラ、
+ * physics.jsは物理司令塔、map.jsはマップ、npc.jsはNPC、camera.jsはカメラ、
  * field.jsは時間・天候・環境、player.jsはプレイヤー、input.jsは入力を担当します。
  */
 
 import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js";
-import { initPhysics } from "./physics.js";
+import { initPhysics, stepPhysics } from "./physics.js";
 import { buildMap } from "./map.js";
 import { createNPCManager } from "./npc.js";
 import { createCameraController } from "./camera.js";
@@ -150,7 +150,11 @@ function frame() {
   npcManager?.update(dt);
   fieldController?.update(dt);
   mapState?.update(dt);
-  physicsWorld.step();
+
+  // 物理の更新は必ずphysics.jsへ渡します。
+  // physics.jsがgravity・speed・touchを統括し、ここでは物理エンジンの直接操作をしません。
+  stepPhysics();
+
   syncVisuals();
   updateWaterHud();
   cameraController?.update(dt);
