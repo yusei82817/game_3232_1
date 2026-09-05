@@ -143,7 +143,7 @@ async function boot() {
       scene, config: CONFIG, terrainHeightAt, mapState, createModel: createHumanoid, animateModel: animateHumanoid,
       physicsWorld, playerBody: playerController.getBody()
     });
-    npcManager.createAll();
+    await npcManager.createAll();
 
     const initialPlayerPosition = playerController.getBody().translation();
     mapState.update(0, initialPlayerPosition);
