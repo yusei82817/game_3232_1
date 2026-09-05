@@ -20,10 +20,12 @@ function createHead(skin, options) {
   const head = new THREE.Group();
   head.position.y = 2.03;
 
+  // 完全な球体ではなく、少し縦長で人間らしい頭部にします。
   const face = new THREE.Mesh(
-    new THREE.SphereGeometry(0.29, 18, 14),
+    new THREE.SphereGeometry(0.30, 20, 16),
     skin
   );
+  face.scale.set(0.94, 1.08, 0.96);
   head.add(face);
 
   const hair = makeMaterial(options.hair ?? 0x25211f, 0.9);
@@ -31,22 +33,52 @@ function createHead(skin, options) {
   const eyeColor = makeMaterial(options.eye ?? 0x3b2a22, 0.4);
   const mouthMat = makeMaterial(0x4a2424, 0.75);
 
-  // 髪は頭頂部から後頭部を覆い、顔の正面（+Z）を開けます。
+  // 頭頂部から後頭部を覆う髪。
   const hairCap = new THREE.Mesh(
-    new THREE.SphereGeometry(0.302, 18, 12, 0, Math.PI * 2, 0, Math.PI * 0.60),
+    new THREE.SphereGeometry(0.314, 20, 14, 0, Math.PI * 2, 0, Math.PI * 0.62),
     hair
   );
-  hairCap.position.y = 0.025;
-  hairCap.position.z = -0.055;
+  hairCap.scale.set(0.96, 1.02, 0.98);
+  hairCap.position.set(0, 0.025, -0.045);
   hairCap.rotation.x = Math.PI;
   head.add(hairCap);
 
-  // 前髪は顔の上端（+Z側）に沿わせます。
-  for (const x of [-0.14, 0, 0.14]) {
-    const bang = new THREE.Mesh(new THREE.SphereGeometry(0.10, 10, 8), hair);
-    bang.scale.set(0.8, 1.15, 0.65);
-    bang.position.set(x, 0.20, 0.205);
+  // 頭頂部に髪の厚みを追加し、球体の頭が露出しないようにします。
+  const topHair = new THREE.Mesh(
+    new THREE.SphereGeometry(0.22, 16, 10),
+    hair
+  );
+  topHair.scale.set(1.18, 0.42, 1.02);
+  topHair.position.set(0, 0.245, -0.015);
+  head.add(topHair);
+
+  // 前髪は球体3個ではなく、細長い毛束として配置します。
+  const bangData = [
+    { x: -0.13, y: 0.185, z: 0.245, rot: -0.12, scale: [0.55, 1.35, 0.48] },
+    { x: 0.00, y: 0.205, z: 0.255, rot: 0.00, scale: [0.58, 1.48, 0.50] },
+    { x: 0.13, y: 0.185, z: 0.245, rot: 0.12, scale: [0.55, 1.35, 0.48] }
+  ];
+
+  for (const bangInfo of bangData) {
+    const bang = new THREE.Mesh(
+      new THREE.CapsuleGeometry(0.065, 0.12, 4, 8),
+      hair
+    );
+    bang.position.set(bangInfo.x, bangInfo.y, bangInfo.z);
+    bang.rotation.z = bangInfo.rot;
+    bang.scale.set(...bangInfo.scale);
     head.add(bang);
+  }
+
+  // 側頭部の髪。前髪だけが浮いて見えないようにします。
+  for (const x of [-0.285, 0.285]) {
+    const sideHair = new THREE.Mesh(
+      new THREE.CapsuleGeometry(0.065, 0.18, 4, 8),
+      hair
+    );
+    sideHair.position.set(x, 0.08, -0.005);
+    sideHair.scale.set(0.78, 1.15, 0.72);
+    head.add(sideHair);
   }
 
   // 耳は頭の左右に配置します。
@@ -57,16 +89,16 @@ function createHead(skin, options) {
     head.add(ear);
   }
 
-  // 目は顔の正面（+Z）に置きます。これがキャラクターの顔の向きです。
+  // 目は白目＋小さめの瞳。巨大な球体目にならないように薄くします。
   for (const x of [-0.105, 0.105]) {
     const eye = new THREE.Mesh(new THREE.SphereGeometry(0.068, 12, 8), eyeWhite);
-    eye.scale.set(1, 1.05, 0.38);
-    eye.position.set(x, 0.055, 0.265);
+    eye.scale.set(1.05, 0.88, 0.28);
+    eye.position.set(x, 0.055, 0.276);
     head.add(eye);
 
-    const pupil = new THREE.Mesh(new THREE.SphereGeometry(0.035, 10, 8), eyeColor);
-    pupil.scale.z = 0.25;
-    pupil.position.set(x, 0.05, 0.293);
+    const pupil = new THREE.Mesh(new THREE.SphereGeometry(0.034, 10, 8), eyeColor);
+    pupil.scale.set(0.82, 1.0, 0.20);
+    pupil.position.set(x, 0.052, 0.298);
     head.add(pupil);
   }
 
@@ -74,20 +106,20 @@ function createHead(skin, options) {
   for (const x of [-0.105, 0.105]) {
     const brow = new THREE.Mesh(new THREE.CapsuleGeometry(0.012, 0.075, 3, 6), hair);
     brow.rotation.z = x < 0 ? 0.12 : -0.12;
-    brow.position.set(x, 0.145, 0.285);
+    brow.position.set(x, 0.145, 0.29);
     head.add(brow);
   }
 
   // 鼻は目より少し前へ出して立体感を付けます。
   const nose = new THREE.Mesh(new THREE.SphereGeometry(0.035, 8, 6), skin);
   nose.scale.set(0.8, 0.9, 0.8);
-  nose.position.set(0, -0.015, 0.292);
+  nose.position.set(0, -0.015, 0.303);
   head.add(nose);
 
   // 口も顔の正面へ置きます。
   const mouth = new THREE.Mesh(new THREE.CapsuleGeometry(0.012, 0.075, 3, 6), mouthMat);
   mouth.rotation.z = Math.PI * 0.5;
-  mouth.position.set(0, -0.115, 0.278);
+  mouth.position.set(0, -0.115, 0.285);
   head.add(mouth);
 
   return head;
