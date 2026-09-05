@@ -4,6 +4,10 @@
  * 巨大な世界を60m四方のチャンクへ分割して管理します。
  * プレイヤー周辺だけを表示・物理ロードするため、世界全体を一度に生成しません。
  * 地形の高さはワールド座標から決定するので、チャンク境界でも地形が途切れません。
+ *
+ * チャンクの生成・破棄は1フレームに少しずつ行います。
+ * 境界を越えた瞬間に大量のGeometry/Rapierを同期生成すると、GLB表示時の負荷と重なって
+ * メインスレッドが停止しやすいためです。
  */
 
 import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js";
@@ -78,7 +82,6 @@ function addChunkObjects(scene, config, terrainHeightAt, cx, cz) {
   const baseX = cx * config.chunkSize;
   const baseZ = cz * config.chunkSize;
 
-  // チャンク座標から決まる疑似乱数を使い、再ロードしても同じ場所に岩が出ます。
   let seed = Math.abs((cx * 374761393 + cz * 668265263) | 0) + 1;
   const random = () => {
     seed = (seed * 1664525 + 1013904223) | 0;
@@ -125,7 +128,6 @@ function createChunk(scene, config, terrainHeightAt, cx, cz, withPhysics) {
 function disposeChunk(chunk) {
   if (chunk.collider) removePhysicsObject(chunk.collider);
   for (const object of chunk.objects) {
-    // 岩のMeshが保持しているRapier物体を先に削除します。
     removePhysicsObject(object.userData.physics);
     object.geometry.dispose();
     object.material.dispose();
@@ -139,59 +141,105 @@ function disposeChunk(chunk) {
 
 export function createChunkManager({ scene, config, terrainHeightAt }) {
   const chunks = new Map();
+  const pending = new Set();
   let lastCenterX = null;
   let lastCenterZ = null;
 
-  function sync(playerX, playerZ) {
+  function getCenter(playerX, playerZ) {
     const size = config.chunkSize;
-    const centerX = Math.floor((playerX + size / 2) / size);
-    const centerZ = Math.floor((playerZ + size / 2) / size);
+    return {
+      x: Math.floor((playerX + size / 2) / size),
+      z: Math.floor((playerZ + size / 2) / size)
+    };
+  }
 
-    // チャンク境界を跨いでいないフレームでは何もしません。
-    // これだけでGLBを動かしている最中の毎フレーム同期コストを大幅に削れます。
-    if (centerX === lastCenterX && centerZ === lastCenterZ) return;
-    lastCenterX = centerX;
-    lastCenterZ = centerZ;
-
+  function wantedFor(centerX, centerZ) {
     const wanted = new Set();
-
-    // 表示用チャンクは広めに残し、遠景まで見渡せるようにします。
     for (let dz = -config.chunkRenderRadius; dz <= config.chunkRenderRadius; dz++) {
       for (let dx = -config.chunkRenderRadius; dx <= config.chunkRenderRadius; dx++) {
         wanted.add(chunkKey(centerX + dx, centerZ + dz));
       }
     }
+    return wanted;
+  }
 
-    for (let dz = -config.chunkRenderRadius; dz <= config.chunkRenderRadius; dz++) {
-      for (let dx = -config.chunkRenderRadius; dx <= config.chunkRenderRadius; dx++) {
-        const cx = centerX + dx;
-        const cz = centerZ + dz;
-        const key = chunkKey(cx, cz);
-        const needsPhysics = Math.abs(dx) <= config.chunkPhysicsRadius && Math.abs(dz) <= config.chunkPhysicsRadius;
-        const current = chunks.get(key);
-
-        if (!current) {
-          chunks.set(key, createChunk(scene, config, terrainHeightAt, cx, cz, needsPhysics));
-        } else if (needsPhysics && !current.collider) {
-          // 既に表示中のMeshを作り直さず、その頂点データからRapierコリジョンだけを追加します。
-          // 以前はここで地形Meshを丸ごと再生成していたため、チャンク境界で大きなフレーム停止が起きやすい構造でした。
-          current.collider = createColliderFromTerrainMesh(current.mesh);
-          current.objects = addChunkObjects(scene, config, terrainHeightAt, cx, cz);
-        }
-      }
+  function enqueueMissing(wanted, centerX, centerZ) {
+    const entries = [];
+    for (const key of wanted) {
+      if (chunks.has(key)) continue;
+      const [cx, cz] = key.split(",").map(Number);
+      const dx = Math.abs(cx - centerX);
+      const dz = Math.abs(cz - centerZ);
+      const needsPhysics = dx <= config.chunkPhysicsRadius && dz <= config.chunkPhysicsRadius;
+      entries.push({ key, cx, cz, priority: (dx + dz) + (needsPhysics ? -20 : 0) });
     }
 
+    entries.sort((a, b) => a.priority - b.priority);
+    for (const entry of entries) pending.add(entry.key);
+  }
+
+  function processOne(centerX, centerZ, wanted) {
+    // 古いチャンクを1つずつ破棄。境界越えで大量disposeしない。
     for (const [key, chunk] of chunks) {
       if (!wanted.has(key)) {
         disposeChunk(chunk);
         chunks.delete(key);
+        return true;
       }
     }
+
+    if (!pending.size) return false;
+
+    let bestKey = null;
+    let bestPriority = Infinity;
+    for (const key of pending) {
+      const [cx, cz] = key.split(",").map(Number);
+      const dx = Math.abs(cx - centerX);
+      const dz = Math.abs(cz - centerZ);
+      const needsPhysics = dx <= config.chunkPhysicsRadius && dz <= config.chunkPhysicsRadius;
+      const priority = dx + dz + (needsPhysics ? -20 : 0);
+      if (priority < bestPriority) {
+        bestPriority = priority;
+        bestKey = key;
+      }
+    }
+
+    if (!bestKey) return false;
+
+    const [cx, cz] = bestKey.split(",").map(Number);
+    const dx = Math.abs(cx - centerX);
+    const dz = Math.abs(cz - centerZ);
+    const needsPhysics = dx <= config.chunkPhysicsRadius && dz <= config.chunkPhysicsRadius;
+
+    chunks.set(bestKey, createChunk(scene, config, terrainHeightAt, cx, cz, needsPhysics));
+    pending.delete(bestKey);
+    return true;
+  }
+
+  function sync(playerX, playerZ) {
+    const center = getCenter(playerX, playerZ);
+
+    if (center.x !== lastCenterX || center.z !== lastCenterZ) {
+      lastCenterX = center.x;
+      lastCenterZ = center.z;
+
+      const wanted = wantedFor(center.x, center.z);
+      enqueueMissing(wanted, center.x, center.z);
+
+      // 現在位置から外れた予約は捨てます。高速移動時に古い方向の生成を続けないためです。
+      for (const key of pending) {
+        if (!wanted.has(key)) pending.delete(key);
+      }
+    }
+
+    const wanted = wantedFor(lastCenterX, lastCenterZ);
+    processOne(lastCenterX, lastCenterZ, wanted);
   }
 
   function disposeAll() {
     for (const chunk of chunks.values()) disposeChunk(chunk);
     chunks.clear();
+    pending.clear();
     lastCenterX = null;
     lastCenterZ = null;
   }
