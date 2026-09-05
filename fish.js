@@ -32,6 +32,11 @@ function findClip(clips, keywords) {
   return clips[0] ?? null;
 }
 
+function dampAngle(current, target, smoothing, dt) {
+  const delta = THREE.MathUtils.euclideanModulo(target - current + Math.PI, Math.PI * 2) - Math.PI;
+  return current + delta * (1 - Math.exp(-smoothing * dt));
+}
+
 function createFishModel(gltf, scale) {
   const model = cloneSkeleton(gltf.scene);
   model.scale.setScalar(scale);
@@ -137,8 +142,10 @@ export async function createFishManager({ scene, getPlayerPosition = () => ({ x:
       const direction = state.velocity.clone().normalize();
       const targetYaw = Math.atan2(direction.x, direction.z);
       const targetPitch = Math.atan2(direction.y, Math.hypot(direction.x, direction.z));
-      state.model.rotation.y = THREE.MathUtils.dampAngle(state.model.rotation.y, targetYaw, 4.0, dt);
-      state.model.rotation.x = THREE.MathUtils.damp(state.model.rotation.x, -targetPitch, 3.0, dt);
+      state.model.rotation.y = dampAngle(state.model.rotation.y, targetYaw, 4.0, dt);
+      state.model.rotation.x = THREE.MathUtils.damp
+        ? THREE.MathUtils.damp(state.model.rotation.x, -targetPitch, 3.0, dt)
+        : state.model.rotation.x + (-targetPitch - state.model.rotation.x) * (1 - Math.exp(-3.0 * dt));
     }
 
     state.model.rotation.z = Math.sin(state.phase * 1.7) * 0.025;
