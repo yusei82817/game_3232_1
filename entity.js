@@ -13,6 +13,9 @@ function makeMaterial(color, roughness = 0.86) {
 
 /**
  * NPCとプレイヤーで共有する人型モデルを生成します。
+ * 腕と脚は「上腕→肘→前腕」「太腿→膝→脛」の親子構造にします。
+ * こうしておくと、上腕を動かしたときに前腕だけが置き去りにならず、
+ * 肘を軸に自然な二関節の動きを作れます。
  */
 export function createHumanoid(options = {}) {
   const group = new THREE.Group();
@@ -43,10 +46,42 @@ export function createHumanoid(options = {}) {
     return pivot;
   }
 
-  const upperArmL = limb(0.105, 0.42, shirt, -0.43, 1.48);
-  const upperArmR = limb(0.105, 0.42, shirt, 0.43, 1.48);
-  const foreArmL = limb(0.095, 0.40, skin, -0.43, 1.06);
-  const foreArmR = limb(0.095, 0.40, skin, 0.43, 1.06);
+  // 上腕の先端が肘になります。前腕は上腕とは別の子Pivotとして肘に接続します。
+  function arm(radius, upperLength, foreLength, upperMaterial, foreMaterial, x, shoulderY) {
+    const shoulder = new THREE.Group();
+    shoulder.position.set(x, shoulderY, 0);
+    group.add(shoulder);
+
+    const upper = new THREE.Mesh(
+      new THREE.CapsuleGeometry(radius, upperLength, 4, 8),
+      upperMaterial
+    );
+    upper.position.y = -upperLength * 0.5;
+    shoulder.add(upper);
+
+    const elbow = new THREE.Group();
+    elbow.position.set(0, -upperLength, 0);
+    shoulder.add(elbow);
+
+    const elbowJoint = new THREE.Mesh(
+      new THREE.SphereGeometry(radius * 1.02, 8, 6),
+      foreMaterial
+    );
+    elbow.add(elbowJoint);
+
+    const fore = new THREE.Mesh(
+      new THREE.CapsuleGeometry(radius * 0.9, foreLength, 4, 8),
+      foreMaterial
+    );
+    fore.position.y = -foreLength * 0.5;
+    elbow.add(fore);
+
+    return { shoulder, elbow };
+  }
+
+  const leftArm = arm(0.105, 0.42, 0.40, shirt, skin, -0.43, 1.48);
+  const rightArm = arm(0.105, 0.42, 0.40, shirt, skin, 0.43, 1.48);
+
   const thighL = limb(0.14, 0.48, pants, -0.19, 0.76);
   const thighR = limb(0.14, 0.48, pants, 0.19, 0.76);
   const shinL = limb(0.105, 0.52, pants, -0.19, 0.28);
@@ -59,8 +94,13 @@ export function createHumanoid(options = {}) {
   footR.position.x = 0.19;
   group.add(footR);
 
+  // animation.jsから直接操作するのは各関節Pivotです。
+  // foreArmはelbowの子なので、上腕と前腕の向きが同じでも必ず肘で連結されます。
   group.userData.limbs = {
-    upperArmL, upperArmR, foreArmL, foreArmR,
+    upperArmL: leftArm.shoulder,
+    upperArmR: rightArm.shoulder,
+    foreArmL: leftArm.elbow,
+    foreArmR: rightArm.elbow,
     thighL, thighR, shinL, shinR
   };
   group.userData.phase = Math.random() * Math.PI * 2;
