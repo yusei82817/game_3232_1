@@ -5,6 +5,8 @@
  * クリップ名はモデルごとに違うため、名前のキーワードから状態を推測します。
  */
 
+import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js";
+
 function findClip(clips, keywords) {
   if (!clips?.length) return null;
   const normalized = clips.map((clip) => ({
@@ -60,7 +62,7 @@ function playClip(model, clip) {
 
   nextAction.reset();
   nextAction.enabled = true;
-  nextAction.setLoop(2201, Infinity); // THREE.LoopRepeat without importing THREE here.
+  nextAction.setLoop(THREE.LoopRepeat, Infinity);
   nextAction.fadeIn(0.16).play();
 
   if (previousAction && previousAction !== nextAction) {
@@ -71,6 +73,55 @@ function playClip(model, clip) {
   model.userData.activeAnimationName = clip.name;
 }
 
+export function triggerPunch(model) {
+  if (!model) return false;
+
+  const mixer = model.userData?.mixer;
+  const clips = model.userData?.animationClips ?? [];
+  if (!mixer || !clips.length) return false;
+
+  const punchClip = findClip(clips, ["punch", "attack"])
+    ?? findClip(clips, ["hit"]);
+
+  if (!punchClip) {
+    console.warn("Punch animation clip was not found.", clips.map((clip) => clip.name));
+    return false;
+  }
+
+  const currentPunch = model.userData.punchAction;
+  if (currentPunch?.isRunning()) return false;
+
+  const nextAction = mixer.clipAction(punchClip);
+  const previousAction = model.userData.activeAction;
+
+  nextAction.reset();
+  nextAction.enabled = true;
+  nextAction.clampWhenFinished = true;
+  nextAction.setLoop(THREE.LoopOnce, 1);
+  nextAction.fadeIn(0.08).play();
+
+  if (previousAction && previousAction !== nextAction) {
+    previousAction.fadeOut(0.08);
+  }
+
+  model.userData.activeAction = nextAction;
+  model.userData.activeAnimationName = punchClip.name;
+  model.userData.punchAction = nextAction;
+  model.userData.punchAnimationName = punchClip.name;
+
+  if (!model.userData.punchFinishHandler) {
+    model.userData.punchFinishHandler = (event) => {
+      if (event.action !== model.userData.punchAction) return;
+      model.userData.punchAction = null;
+      model.userData.activeAction = null;
+      model.userData.activeAnimationName = null;
+    };
+    mixer.addEventListener("finished", model.userData.punchFinishHandler);
+  }
+
+  return true;
+}
+
 export function animateHumanoid(model, speed, grounded, running, dt, inWater = false, config = null) {
   if (!model) return;
 
@@ -78,9 +129,13 @@ export function animateHumanoid(model, speed, grounded, running, dt, inWater = f
   const clips = model.userData?.animationClips ?? [];
 
   if (mixer && clips.length) {
+    mixer.update(dt);
+
+    // パンチ中は歩行・走行・ジャンプの自動切り替えで上書きしない。
+    if (model.userData.punchAction?.isRunning()) return;
+
     const clip = chooseClip(model, speed, grounded, running, inWater);
     playClip(model, clip);
-    mixer.update(dt);
     return;
   }
 
