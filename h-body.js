@@ -14,33 +14,35 @@ function loadTemplate() {
   return templatePromise;
 }
 
-export function createHumanBody(options = {}) {
+function cloneModel(gltf, options = {}) {
   const group = new THREE.Group();
-  group.userData.phase = Math.random() * Math.PI * 2;
-  group.userData.isGLBHumanoid = true;
-  group.userData.loading = true;
-  group.userData.animations = [];
-  group.userData.animationClips = [];
+  const model = gltf.scene.clone(true);
 
-  loadTemplate().then((gltf) => {
-    if (!group.parent && group.userData.disposed) return;
-    const model = gltf.scene.clone(true);
-    model.scale.setScalar(options.scale ?? 1);
-    model.traverse((object) => {
-      if (!object.isMesh) return;
-      object.castShadow = true;
-      object.receiveShadow = true;
-    });
-    group.add(model);
-    group.userData.animations = gltf.animations;
-    group.userData.animationClips = gltf.animations;
-    group.userData.loading = false;
-  }).catch((error) => {
-    console.error("Failed to load humanoid GLB:", error);
-    group.userData.loading = false;
+  model.scale.setScalar(options.scale ?? 1);
+  model.traverse((object) => {
+    if (!object.isMesh) return;
+    object.castShadow = true;
+    object.receiveShadow = true;
   });
 
+  group.add(model);
+  group.userData.phase = Math.random() * Math.PI * 2;
+  group.userData.isGLBHumanoid = true;
+  group.userData.animations = gltf.animations ?? [];
+  group.userData.animationClips = gltf.animations ?? [];
+  group.userData.mixer = group.userData.animations.length
+    ? new THREE.AnimationMixer(model)
+    : null;
+  group.userData.activeAction = null;
+  group.userData.activeAnimationName = null;
+  group.userData.disposed = false;
+
   return group;
+}
+
+export async function createHumanBody(options = {}) {
+  const gltf = await loadTemplate();
+  return cloneModel(gltf, options);
 }
 
 export function preloadHumanModel() {
@@ -48,5 +50,5 @@ export function preloadHumanModel() {
 }
 
 export function getHumanAnimations() {
-  return loadTemplate().then((gltf) => gltf.animations);
+  return loadTemplate().then((gltf) => gltf.animations ?? []);
 }
