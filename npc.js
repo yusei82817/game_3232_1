@@ -84,20 +84,13 @@ export function createNPCManager({ scene, config, terrainHeightAt, mapState, cre
   }
 
   function chooseTarget(npc, position) {
-    // 近い範囲から複数候補を試し、湖・急斜面・極端に近い地点を避けます。
+    // チャンク式の世界では固定境界を設けず、現在位置の周囲から目的地を選びます。
+    // これでNPCも世界の外周にぶつかることなく、ロードされた荒野を継続して歩けます。
     for (let attempt = 0; attempt < 14; attempt++) {
       const angle = Math.random() * Math.PI * 2;
       const radius = 6 + Math.random() * 18;
-      const x = THREE.MathUtils.clamp(
-        position.x + Math.cos(angle) * radius,
-        -config.worldSize * 0.46,
-        config.worldSize * 0.46
-      );
-      const z = THREE.MathUtils.clamp(
-        position.z + Math.sin(angle) * radius,
-        -config.worldSize * 0.46,
-        config.worldSize * 0.46
-      );
+      const x = position.x + Math.cos(angle) * radius;
+      const z = position.z + Math.sin(angle) * radius;
 
       if (targetIsSafe(x, z, position.x, position.z)) {
         npc.target.set(x, 0, z);
@@ -109,9 +102,9 @@ export function createNPCManager({ scene, config, terrainHeightAt, mapState, cre
     // 候補が全滅した場合は、現在位置の少し先へ退避させます。
     const angle = npc.wanderBias + (Math.random() - 0.5) * 1.4;
     npc.target.set(
-      THREE.MathUtils.clamp(position.x + Math.cos(angle) * 6, -config.worldSize * 0.46, config.worldSize * 0.46),
+      position.x + Math.cos(angle) * 6,
       0,
-      THREE.MathUtils.clamp(position.z + Math.sin(angle) * 6, -config.worldSize * 0.46, config.worldSize * 0.46)
+      position.z + Math.sin(angle) * 6
     );
   }
 
@@ -187,9 +180,9 @@ export function createNPCManager({ scene, config, terrainHeightAt, mapState, cre
         const away = new THREE.Vector3(position.x - playerPosition.x, 0, position.z - playerPosition.z);
         if (away.lengthSq() > 0.01) away.normalize();
         npc.target.set(
-          THREE.MathUtils.clamp(position.x + away.x * (8 + Math.random() * 8), -config.worldSize * 0.46, config.worldSize * 0.46),
+          position.x + away.x * (8 + Math.random() * 8),
           0,
-          THREE.MathUtils.clamp(position.z + away.z * (8 + Math.random() * 8), -config.worldSize * 0.46, config.worldSize * 0.46)
+          position.z + away.z * (8 + Math.random() * 8)
         );
       }
     }
