@@ -2,7 +2,6 @@ import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.m
 import { GLTFLoader } from "https://cdn.jsdelivr.net/npm/three@0.180.0/examples/jsm/loaders/GLTFLoader.js";
 
 const MODEL_URL = "./Man%20by%20Quaternius%20-%20HMnuH5geEG.glb";
-
 let templatePromise = null;
 
 function loadTemplate() {
@@ -15,15 +14,18 @@ function loadTemplate() {
   return templatePromise;
 }
 
-export function createHumanoidPlaceholder(options = {}) {
+export function createHumanBody(options = {}) {
   const group = new THREE.Group();
   group.userData.phase = Math.random() * Math.PI * 2;
   group.userData.isGLBHumanoid = true;
   group.userData.loading = true;
+  group.userData.animations = [];
+  group.userData.animationClips = [];
+
   loadTemplate().then((gltf) => {
+    if (!group.parent && group.userData.disposed) return;
     const model = gltf.scene.clone(true);
-    const scale = options.scale ?? 1;
-    model.scale.setScalar(scale);
+    model.scale.setScalar(options.scale ?? 1);
     model.traverse((object) => {
       if (!object.isMesh) return;
       object.castShadow = true;
@@ -37,6 +39,7 @@ export function createHumanoidPlaceholder(options = {}) {
     console.error("Failed to load humanoid GLB:", error);
     group.userData.loading = false;
   });
+
   return group;
 }
 
