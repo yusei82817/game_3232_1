@@ -17,6 +17,10 @@ function loadTemplate() {
 
 export async function createHumanBody(options = {}) {
   const gltf = await loadTemplate();
+
+  // 重要: プレイヤーが操作するTransformと、GLBの骨格Transformを分離する。
+  // AnimationMixerがGLB内部のノードを動かしても、プレイヤーの位置・回転は影響を受けない。
+  const root = new THREE.Group();
   const model = cloneSkeleton(gltf.scene);
 
   model.scale.setScalar(options.scale ?? 1);
@@ -29,18 +33,27 @@ export async function createHumanBody(options = {}) {
     object.receiveShadow = true;
   });
 
-  model.userData.phase = Math.random() * Math.PI * 2;
-  model.userData.isGLBHumanoid = true;
-  model.userData.animations = gltf.animations ?? [];
-  model.userData.animationClips = gltf.animations ?? [];
-  model.userData.mixer = model.userData.animationClips.length
+  root.add(model);
+  root.userData.phase = Math.random() * Math.PI * 2;
+  root.userData.isGLBHumanoid = true;
+  root.userData.glbModel = model;
+  root.userData.animations = gltf.animations ?? [];
+  root.userData.animationClips = gltf.animations ?? [];
+  root.userData.mixer = root.userData.animationClips.length
     ? new THREE.AnimationMixer(model)
     : null;
-  model.userData.activeAction = null;
-  model.userData.activeAnimationName = null;
+  root.userData.activeAction = null;
+  root.userData.activeAnimationName = null;
+  root.userData.loading = false;
 
-  console.info("Humanoid GLB ready:", model.userData.animationClips.map((clip) => clip.name));
-  return model;
+  console.info(
+    "Humanoid GLB ready:",
+    MODEL_URL,
+    "animations:",
+    root.userData.animationClips.map((clip) => clip.name)
+  );
+
+  return root;
 }
 
 export function preloadHumanModel() {
