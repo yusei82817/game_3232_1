@@ -13,8 +13,8 @@ function makeMaterial(color, roughness = 0.86) {
 
 /**
  * NPCとプレイヤーで共有する人型モデルを生成します。
- * 腕と脚は「上腕→肘→前腕」「太腿→膝→脛」の親子構造にします。
- * こうしておくと、関節を動かしても上下のパーツが置き去りになりません。
+ * 腕と脚は「上腕→肘→前腕」「太腿→膝→脛→足首→足」の親子構造です。
+ * こうしておくと、関節を動かしても下側のパーツが置き去りになりません。
  */
 export function createHumanoid(options = {}) {
   const group = new THREE.Group();
@@ -35,7 +35,8 @@ export function createHumanoid(options = {}) {
   head.position.y = 2.03;
   group.add(head);
 
-  // 単純な1本の脚ではなく、太腿→膝→脛の二関節構造にします。
+  // 太腿→膝→脛→足首の親子構造を作ります。
+  // footは足首の子なので、脚を振っても足が脚から分離しません。
   function leg(radius, thighLength, shinLength, x, hipY) {
     const hip = new THREE.Group();
     hip.position.set(x, hipY, 0);
@@ -65,7 +66,28 @@ export function createHumanoid(options = {}) {
     shin.position.y = -shinLength * 0.5;
     knee.add(shin);
 
-    return { hip, knee };
+    // 脛の末端に足首Pivotを置きます。
+    const ankle = new THREE.Group();
+    ankle.position.set(0, -shinLength, 0);
+    knee.add(ankle);
+
+    // 足首そのものを小さな関節として表示します。
+    const ankleJoint = new THREE.Mesh(
+      new THREE.SphereGeometry(radius * 0.72, 8, 6),
+      skin
+    );
+    ankle.add(ankleJoint);
+
+    // 足は足首を親にします。
+    // zを少し前方へ出して、踵が脛の真下に残る自然な足位置にします。
+    const foot = new THREE.Mesh(
+      new THREE.BoxGeometry(0.19, 0.12, 0.34),
+      shoe
+    );
+    foot.position.set(0, -0.045, 0.08);
+    ankle.add(foot);
+
+    return { hip, knee, ankle };
   }
 
   // 上腕→肘→前腕の親子構造。肘を独立した関節として扱います。
@@ -107,15 +129,8 @@ export function createHumanoid(options = {}) {
   const leftLeg = leg(0.14, 0.48, 0.52, -0.19, 0.76);
   const rightLeg = leg(0.14, 0.48, 0.52, 0.19, 0.76);
 
-  const footL = new THREE.Mesh(new THREE.BoxGeometry(0.19, 0.12, 0.34), shoe);
-  footL.position.set(-0.19, 0.05, 0.08);
-  group.add(footL);
-  const footR = footL.clone();
-  footR.position.x = 0.19;
-  group.add(footR);
-
   // animation.jsから操作するのは各関節Pivotです。
-  // 脛は膝の子なので、太腿を動かしても膝から下が一緒についてきます。
+  // 脛は膝の子、足は足首の子なので、脚全体が一続きになります。
   group.userData.limbs = {
     upperArmL: leftArm.shoulder,
     upperArmR: rightArm.shoulder,
@@ -124,7 +139,9 @@ export function createHumanoid(options = {}) {
     thighL: leftLeg.hip,
     thighR: rightLeg.hip,
     shinL: leftLeg.knee,
-    shinR: rightLeg.knee
+    shinR: rightLeg.knee,
+    ankleL: leftLeg.ankle,
+    ankleR: rightLeg.ankle
   };
   group.userData.phase = Math.random() * Math.PI * 2;
   return group;
