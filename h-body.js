@@ -1,5 +1,6 @@
 import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js";
 import { GLTFLoader } from "https://cdn.jsdelivr.net/npm/three@0.180.0/examples/jsm/loaders/GLTFLoader.js";
+import { clone as cloneSkeleton } from "https://cdn.jsdelivr.net/npm/three@0.180.0/examples/jsm/utils/SkeletonUtils.js";
 
 const MODEL_URL = "./Man%20by%20Quaternius%20-%20HMnuH5geEG.glb";
 let templatePromise = null;
@@ -14,35 +15,32 @@ function loadTemplate() {
   return templatePromise;
 }
 
-function cloneModel(gltf, options = {}) {
-  const group = new THREE.Group();
-  const model = gltf.scene.clone(true);
+export async function createHumanBody(options = {}) {
+  const gltf = await loadTemplate();
+  const model = cloneSkeleton(gltf.scene);
 
   model.scale.setScalar(options.scale ?? 1);
+  model.position.set(0, 0, 0);
+  model.rotation.set(0, 0, 0);
+
   model.traverse((object) => {
     if (!object.isMesh) return;
     object.castShadow = true;
     object.receiveShadow = true;
   });
 
-  group.add(model);
-  group.userData.phase = Math.random() * Math.PI * 2;
-  group.userData.isGLBHumanoid = true;
-  group.userData.animations = gltf.animations ?? [];
-  group.userData.animationClips = gltf.animations ?? [];
-  group.userData.mixer = group.userData.animations.length
+  model.userData.phase = Math.random() * Math.PI * 2;
+  model.userData.isGLBHumanoid = true;
+  model.userData.animations = gltf.animations ?? [];
+  model.userData.animationClips = gltf.animations ?? [];
+  model.userData.mixer = model.userData.animationClips.length
     ? new THREE.AnimationMixer(model)
     : null;
-  group.userData.activeAction = null;
-  group.userData.activeAnimationName = null;
-  group.userData.disposed = false;
+  model.userData.activeAction = null;
+  model.userData.activeAnimationName = null;
 
-  return group;
-}
-
-export async function createHumanBody(options = {}) {
-  const gltf = await loadTemplate();
-  return cloneModel(gltf, options);
+  console.info("Humanoid GLB ready:", model.userData.animationClips.map((clip) => clip.name));
+  return model;
 }
 
 export function preloadHumanModel() {
