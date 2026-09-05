@@ -58,9 +58,19 @@ function createChunkTerrain(scene, config, terrainHeightAt, cx, cz, withPhysics)
   mesh.receiveShadow = true;
   scene.add(mesh);
 
-  // 物理はプレイヤーに近いチャンクだけ作ります。
   const collider = withPhysics ? createFixedTrimesh({ vertices: positions, indices }) : null;
   return { mesh, collider };
+}
+
+function createColliderFromTerrainMesh(mesh) {
+  const positionAttribute = mesh.geometry.getAttribute("position");
+  const indexAttribute = mesh.geometry.index;
+  if (!positionAttribute || !indexAttribute) return null;
+
+  return createFixedTrimesh({
+    vertices: positionAttribute.array,
+    indices: indexAttribute.array
+  });
 }
 
 function addChunkObjects(scene, config, terrainHeightAt, cx, cz) {
@@ -129,11 +139,20 @@ function disposeChunk(chunk) {
 
 export function createChunkManager({ scene, config, terrainHeightAt }) {
   const chunks = new Map();
+  let lastCenterX = null;
+  let lastCenterZ = null;
 
   function sync(playerX, playerZ) {
     const size = config.chunkSize;
     const centerX = Math.floor((playerX + size / 2) / size);
     const centerZ = Math.floor((playerZ + size / 2) / size);
+
+    // チャンク境界を跨いでいないフレームでは何もしません。
+    // これだけでGLBを動かしている最中の毎フレーム同期コストを大幅に削れます。
+    if (centerX === lastCenterX && centerZ === lastCenterZ) return;
+    lastCenterX = centerX;
+    lastCenterZ = centerZ;
+
     const wanted = new Set();
 
     // 表示用チャンクは広めに残し、遠景まで見渡せるようにします。
@@ -154,13 +173,9 @@ export function createChunkManager({ scene, config, terrainHeightAt }) {
         if (!current) {
           chunks.set(key, createChunk(scene, config, terrainHeightAt, cx, cz, needsPhysics));
         } else if (needsPhysics && !current.collider) {
-          // 表示済みチャンクが物理範囲へ入ったら、同じ地形から衝突面を追加します。
-          const terrain = createChunkTerrain(scene, config, terrainHeightAt, cx, cz, true);
-          current.mesh.geometry.dispose();
-          current.mesh.material.dispose();
-          current.mesh.removeFromParent();
-          current.mesh = terrain.mesh;
-          current.collider = terrain.collider;
+          // 既に表示中のMeshを作り直さず、その頂点データからRapierコリジョンだけを追加します。
+          // 以前はここで地形Meshを丸ごと再生成していたため、チャンク境界で大きなフレーム停止が起きやすい構造でした。
+          current.collider = createColliderFromTerrainMesh(current.mesh);
           current.objects = addChunkObjects(scene, config, terrainHeightAt, cx, cz);
         }
       }
@@ -177,6 +192,8 @@ export function createChunkManager({ scene, config, terrainHeightAt }) {
   function disposeAll() {
     for (const chunk of chunks.values()) disposeChunk(chunk);
     chunks.clear();
+    lastCenterX = null;
+    lastCenterZ = null;
   }
 
   return {
