@@ -1,20 +1,11 @@
 /*
  * NPC担当。
- *
- * NPCの生成・AI・移動・向き・アニメーション更新をgame.jsから独立させます。
- * NPCの物理位置はRapierを正とし、Three.jsモデルは毎フレームその位置へ同期します。
- *
- * このファイルでは「ただランダムに歩く」状態から一段進めて、
- * 個体差・加減速・障害物回避・他NPC回避・プレイヤーへの反応を扱います。
- * 速度計算と接触Rayはphysics.jsを司令塔として利用します。
+ * NPCの生成・AI・移動・向き・アニメーション更新を担当します。
  */
 
 import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js";
 import { createDynamicCapsule, applyHorizontalSpeed, raycastTouch } from "./physics.js";
 
-// Three.js r180にはMathUtils.lerpAngleが存在しないため、
-// 角度差を-π～πへ折り返してから補間します。これにより359°→1°のような境界でも、
-// ほぼ1回転してしまうことなく最短方向へ自然に旋回できます。
 function lerpAngle(current, target, alpha) {
   const twoPi = Math.PI * 2;
   const delta = THREE.MathUtils.euclideanModulo(target - current + Math.PI, twoPi) - Math.PI;
@@ -25,7 +16,7 @@ export function createNPCManager({ scene, config, terrainHeightAt, mapState, cre
   const npcs = [];
   const nearbyScratch = new THREE.Vector3();
 
-  function createNPC(index) {
+  async function createNPC(index) {
     const angle = index / config.npcCount * Math.PI * 2;
     const radius = 12 + (index % 4) * 7;
     const x = Math.cos(angle) * radius;
@@ -42,11 +33,11 @@ export function createNPCManager({ scene, config, terrainHeightAt, mapState, cre
       damping: 1.1
     });
 
-    const model = createModel({
+    const model = await createModel({
       shirt: new THREE.Color().setHSL((index * 0.13) % 1, 0.28, 0.38).getHex(),
-      pants: 0x30333a
+      pants: 0x30333a,
+      scale: 0.96
     });
-    model.scale.setScalar(0.96);
     scene.add(model);
 
     npcs.push({
@@ -70,48 +61,30 @@ export function createNPCManager({ scene, config, terrainHeightAt, mapState, cre
   function targetIsSafe(x, z, originX, originZ) {
     if (Math.hypot(x - originX, z - originZ) < 3.0) return false;
     if (mapState?.isWaterAt(x, z)) return false;
-
-    // 地形の高低差が大きすぎる目的地は避け、急斜面への突入を減らします。
     const center = terrainHeightAt(x, z);
-    const samples = [
-      terrainHeightAt(x + 1.5, z),
-      terrainHeightAt(x - 1.5, z),
-      terrainHeightAt(x, z + 1.5),
-      terrainHeightAt(x, z - 1.5)
-    ];
+    const samples = [terrainHeightAt(x + 1.5, z), terrainHeightAt(x - 1.5, z), terrainHeightAt(x, z + 1.5), terrainHeightAt(x, z - 1.5)];
     const maxSlope = Math.max(...samples.map((height) => Math.abs(height - center)));
     return maxSlope < 1.45;
   }
 
   function chooseTarget(npc, position) {
-    // チャンク式の世界では固定境界を設けず、現在位置の周囲から目的地を選びます。
-    // これでNPCも世界の外周にぶつかることなく、ロードされた荒野を継続して歩けます。
     for (let attempt = 0; attempt < 14; attempt++) {
       const angle = Math.random() * Math.PI * 2;
       const radius = 6 + Math.random() * 18;
       const x = position.x + Math.cos(angle) * radius;
       const z = position.z + Math.sin(angle) * radius;
-
       if (targetIsSafe(x, z, position.x, position.z)) {
         npc.target.set(x, 0, z);
         npc.wanderBias = angle;
         return;
       }
     }
-
-    // 候補が全滅した場合は、現在位置の少し先へ退避させます。
     const angle = npc.wanderBias + (Math.random() - 0.5) * 1.4;
-    npc.target.set(
-      position.x + Math.cos(angle) * 6,
-      0,
-      position.z + Math.sin(angle) * 6
-    );
+    npc.target.set(position.x + Math.cos(angle) * 6, 0, position.z + Math.sin(angle) * 6);
   }
 
   function applyAvoidance(npc, position, direction) {
     const avoidance = nearbyScratch.set(0, 0, 0);
-
-    // NPC同士が密集した場合は、近い個体から離れる方向へ補正します。
     for (const other of npcs) {
       if (other === npc) continue;
       const otherPosition = other.body.translation();
@@ -119,14 +92,11 @@ export function createNPCManager({ scene, config, terrainHeightAt, mapState, cre
       const dz = position.z - otherPosition.z;
       const distanceSq = dx * dx + dz * dz;
       if (distanceSq > 16 || distanceSq < 0.0001) continue;
-
       const distance = Math.sqrt(distanceSq);
       const strength = (4 - distance) / 4;
       avoidance.x += (dx / distance) * strength;
       avoidance.z += (dz / distance) * strength;
     }
-
-    // プレイヤーへ近づきすぎたNPCは、会話ではなく行動として距離を取ります。
     if (playerBody) {
       const playerPosition = playerBody.translation();
       const dx = position.x - playerPosition.x;
@@ -140,7 +110,6 @@ export function createNPCManager({ scene, config, terrainHeightAt, mapState, cre
         if (distance < 3.0) npc.state = "FLEE";
       }
     }
-
     if (avoidance.lengthSq() > 0.001) {
       avoidance.normalize();
       direction.lerp(avoidance, Math.min(0.72, avoidance.length() + 0.18)).normalize();
@@ -149,17 +118,13 @@ export function createNPCManager({ scene, config, terrainHeightAt, mapState, cre
 
   function obstacleAvoidance(npc, position, direction) {
     if (!physicsWorld) return;
-
-    // 前方を短いRayで確認し、岩などの固定コリジョンへ正面衝突し続けないようにします。
-    const origin = { x: position.x, y: position.y - 0.35, z: position.z };
     const hit = raycastTouch(
-      origin,
+      { x: position.x, y: position.y - 0.35, z: position.z },
       { x: direction.x, y: 0, z: direction.z },
       2.4,
       npc.collider.handle
     );
     if (!hit) return;
-
     const side = Math.random() < 0.5 ? -1 : 1;
     const steer = new THREE.Vector3(-direction.z * side, 0, direction.x * side);
     direction.lerp(steer, 0.75).normalize();
@@ -169,7 +134,6 @@ export function createNPCManager({ scene, config, terrainHeightAt, mapState, cre
   function updateNPC(npc, dt) {
     npc.thinkTimer -= dt;
     npc.stateTimer -= dt;
-
     const position = npc.body.translation();
     const targetDistance = Math.hypot(position.x - npc.target.x, position.z - npc.target.z);
 
@@ -179,11 +143,7 @@ export function createNPCManager({ scene, config, terrainHeightAt, mapState, cre
       if (playerPosition) {
         const away = new THREE.Vector3(position.x - playerPosition.x, 0, position.z - playerPosition.z);
         if (away.lengthSq() > 0.01) away.normalize();
-        npc.target.set(
-          position.x + away.x * (8 + Math.random() * 8),
-          0,
-          position.z + away.z * (8 + Math.random() * 8)
-        );
+        npc.target.set(position.x + away.x * (8 + Math.random() * 8), 0, position.z + away.z * (8 + Math.random() * 8));
       }
     }
 
@@ -193,60 +153,32 @@ export function createNPCManager({ scene, config, terrainHeightAt, mapState, cre
       if (npc.state === "WANDER") chooseTarget(npc, position);
     }
 
-    const direction = new THREE.Vector3(
-      npc.target.x - position.x,
-      0,
-      npc.target.z - position.z
-    );
+    const direction = new THREE.Vector3(npc.target.x - position.x, 0, npc.target.z - position.z);
     if (direction.lengthSq() > 0.01) direction.normalize();
     else direction.copy(npc.lastDirection);
-
     applyAvoidance(npc, position, direction);
     obstacleAvoidance(npc, position, direction);
     npc.lastDirection.lerp(direction, 1 - Math.exp(-npc.turnRate * dt)).normalize();
 
     const targetSpeed = npc.state === "FLEE" ? npc.speed * 1.45 : npc.speed;
-    const targetVX = npc.lastDirection.x * targetSpeed;
-    const targetVZ = npc.lastDirection.z * targetSpeed;
-    const acceleration = npc.state === "AVOID" ? npc.acceleration * 1.35 : npc.acceleration;
-
-    // 速度計算はspeed.jsへphysics.js経由で委譲し、RapierへImpulseを適用します。
     applyHorizontalSpeed(npc.body, {
-      targetX: targetVX,
-      targetZ: targetVZ,
-      acceleration,
-      braking: acceleration,
+      targetX: npc.lastDirection.x * targetSpeed,
+      targetZ: npc.lastDirection.z * targetSpeed,
+      acceleration: npc.state === "AVOID" ? npc.acceleration * 1.35 : npc.acceleration,
+      braking: npc.acceleration,
       mass: 65,
       dt
     });
 
-    // 移動方向へ身体を自然に向けます。
     if (npc.lastDirection.lengthSq() > 0.01) {
       const angle = Math.atan2(npc.lastDirection.x, npc.lastDirection.z);
-      npc.model.rotation.y = lerpAngle(
-        npc.model.rotation.y,
-        angle,
-        1 - Math.exp(-npc.turnRate * dt)
-      );
+      npc.model.rotation.y = lerpAngle(npc.model.rotation.y, angle, 1 - Math.exp(-npc.turnRate * dt));
     }
 
     const velocity = npc.body.linvel();
     const horizontalSpeed = Math.hypot(velocity.x, velocity.z);
-    const moving = horizontalSpeed > 0.18;
-    npc.phase += dt * (moving ? 6.0 + horizontalSpeed * 0.8 : 1.5);
-
-    // 歩行アニメーションはnpc.jsから共通アニメーション関数へ渡します。
-    if (animateModel) {
-      animateModel(npc.model, horizontalSpeed, true, false, dt, false);
-    } else {
-      const limbs = npc.model.userData.limbs;
-      const swing = moving ? Math.sin(npc.phase) * 0.42 : 0;
-      const opposite = -swing;
-      limbs.thighL.rotation.x = swing;
-      limbs.thighR.rotation.x = opposite;
-      limbs.upperArmL.rotation.x = opposite * 0.7;
-      limbs.upperArmR.rotation.x = swing * 0.7;
-    }
+    npc.phase += dt * (horizontalSpeed > 0.18 ? 6.0 + horizontalSpeed * 0.8 : 1.5);
+    animateModel?.(npc.model, horizontalSpeed, true, false, dt, false);
   }
 
   function update(dt) {
@@ -254,20 +186,17 @@ export function createNPCManager({ scene, config, terrainHeightAt, mapState, cre
   }
 
   function syncVisuals() {
-    // NPCの表示位置はRapierの物理状態から毎フレーム決定します。
     for (const npc of npcs) {
       const position = npc.body.translation();
       npc.model.position.set(position.x, position.y - 1.04, position.z);
     }
   }
 
-  function createAll() {
-    for (let i = 0; i < config.npcCount; i++) createNPC(i);
+  async function createAll() {
+    await Promise.all(Array.from({ length: config.npcCount }, (_, index) => createNPC(index)));
   }
 
-  function getAll() {
-    return npcs;
-  }
+  function getAll() { return npcs; }
 
   return { createAll, update, syncVisuals, getAll };
 }
