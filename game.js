@@ -3,13 +3,14 @@
  *
  * ゲーム全体の初期化と描画ループ、各システムの接続を担当します。
  * physics.jsは物理司令塔、map.jsはマップ、chunk.jsは巨大世界のストリーミング、
- * npc.jsはNPC、camera.jsはカメラ、field.jsは時間・天候、player.jsはプレイヤーを担当します。
+ * npc.jsはNPC、mob.jsは動物Mob、camera.jsはカメラ、field.jsは時間・天候、player.jsはプレイヤーを担当します。
  */
 
 import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js";
 import { initPhysics, stepPhysics } from "./physics.js";
 import { buildMap } from "./map.js";
 import { createNPCManager } from "./npc.js";
+import { createMobManager } from "./mob.js";
 import { createCameraController } from "./camera.js";
 import { createFieldController } from "./field.js";
 import { createPlayerController } from "./player.js";
@@ -69,6 +70,15 @@ const CONFIG = {
   npcCount: 14,
   npcWalkSpeed: 1.7,
   npcThinkInterval: 0.35,
+
+  // 動物Mob。最初は軽量な個体数にして、チャンクストリーミングへの負荷を抑えます。
+  chickenCount: 8,
+  cowCount: 4,
+  pigCount: 5,
+  mobSpawnRadius: 35,
+  mobThinkInterval: 1.2,
+  mobFearDistance: 7.0,
+
   sunIntensity: 3.0,
   ambientDayIntensity: 0.55,
   ambientNightIntensity: 0.12
@@ -76,7 +86,7 @@ const CONFIG = {
 
 let scene, camera, renderer, physicsWorld;
 let sunLight, sunMesh, hemiLight;
-let npcManager, cameraController, fieldController, playerController;
+let npcManager, mobManager, cameraController, fieldController, playerController;
 let terrainHeightAt, mapState;
 
 const inputController = createInputController();
@@ -122,6 +132,7 @@ function setupScene() {
 function syncVisuals() {
   playerController?.syncVisual();
   npcManager?.syncVisuals();
+  mobManager?.syncVisuals();
 }
 
 function updateWaterHud() {
@@ -164,6 +175,7 @@ function frame() {
 
   playerController?.update(dt);
   npcManager?.update(dt);
+  mobManager?.update(dt);
   fieldController?.update(dt);
 
   // プレイヤーの現在位置をチャンク管理へ渡し、周囲の世界をロード・アンロードします。
@@ -241,6 +253,36 @@ async function boot() {
       playerBody: playerController.getBody()
     });
     npcManager.createAll();
+
+    // 初期チャンクを先に生成してから動物を配置します。
+    // これでMob生成直後からプレイヤー周辺の地形コリジョンが存在します。
+    const initialPlayerPosition = playerController.getBody().translation();
+    mapState.update(0, initialPlayerPosition);
+
+    mobManager = createMobManager({
+      scene,
+      terrainHeightAt,
+      physicsWorld,
+      playerBody: playerController.getBody(),
+      isWaterAt: mapState.isWaterAt,
+      config: CONFIG
+    });
+
+    mobManager.spawnMany("chicken", CONFIG.chickenCount, {
+      x: initialPlayerPosition.x,
+      z: initialPlayerPosition.z,
+      radius: CONFIG.mobSpawnRadius
+    });
+    mobManager.spawnMany("cow", CONFIG.cowCount, {
+      x: initialPlayerPosition.x,
+      z: initialPlayerPosition.z,
+      radius: CONFIG.mobSpawnRadius
+    });
+    mobManager.spawnMany("pig", CONFIG.pigCount, {
+      x: initialPlayerPosition.x,
+      z: initialPlayerPosition.z,
+      radius: CONFIG.mobSpawnRadius
+    });
 
     window.addEventListener("resize", resize);
     syncVisuals();
