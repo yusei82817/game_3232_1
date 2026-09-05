@@ -64,9 +64,7 @@ export function createFixedTrimesh({ vertices, indices }) {
   );
 }
 
-/**
- * Heightfield生成API。別の地形で利用できるよう残しています。
- */
+/** Heightfield生成API。別の地形で利用できるよう残しています。 */
 export function createFixedHeightfield({ rows, cols, heights, scale }) {
   const rapierScale = new RAPIER.Vector3(scale.x, scale.y, scale.z);
   return world.createCollider(
@@ -85,6 +83,25 @@ export function createFixedBall({ x, y, z, radius, friction = 0.9, restitution =
     body
   );
   return { body, collider };
+}
+
+/**
+ * チャンクがアンロードされるとき、対応するRapier物体も削除します。
+ * これを行わないと見えない遠方の地形や岩が物理世界に残り続けます。
+ */
+export function removePhysicsObject(object) {
+  if (!world || !object) return;
+
+  if (object.body) {
+    world.removeRigidBody(object.body.handle);
+    return;
+  }
+
+  if (object.collider) {
+    world.removeCollider(object.collider.handle, true);
+  } else if (typeof object.handle === "number") {
+    world.removeCollider(object.handle, true);
+  }
 }
 
 export function applyHorizontalSpeed(body, options) {
