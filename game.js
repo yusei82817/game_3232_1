@@ -71,11 +71,11 @@ const CONFIG = {
   npcWalkSpeed: 1.7,
   npcThinkInterval: 0.35,
 
-  // 動物Mob。最初は軽量な個体数にして、チャンクストリーミングへの負荷を抑えます。
+  // 動物Mob。プレイヤーから見える距離を優先し、初期配置を近距離にします。
   chickenCount: 8,
   cowCount: 4,
   pigCount: 5,
-  mobSpawnRadius: 35,
+  mobSpawnRadius: 14,
   mobThinkInterval: 1.2,
   mobFearDistance: 7.0,
 
