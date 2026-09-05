@@ -16,6 +16,8 @@ function makeMaterial(color, roughness = 0.86) {
 /**
  * 岩を生成します。
  * コリジョン生成関数を外から受け取ることで、物理システムをcreate.jsへ直接依存させません。
+ * 生成した物理オブジェクトをuserDataへ保持することで、チャンクのアンロード時に
+ * 見た目だけでなくRapier側の衝突物も確実に削除できます。
  */
 export function createRock({
   scene,
@@ -38,12 +40,13 @@ export function createRock({
   mesh.receiveShadow = true;
   scene.add(mesh);
 
-  createCollider?.({
+  const physics = createCollider?.({
     x,
     y,
     z,
     radius: 0.95 * scale
-  });
+  }) ?? null;
 
+  mesh.userData.physics = physics;
   return mesh;
 }
