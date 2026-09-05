@@ -114,7 +114,13 @@ function createChunk(scene, config, terrainHeightAt, cx, cz, withPhysics) {
 
 function disposeChunk(chunk) {
   if (chunk.collider) removePhysicsObject(chunk.collider);
-  for (const object of chunk.objects) removePhysicsObject(object);
+  for (const object of chunk.objects) {
+    // 岩のMeshが保持しているRapier物体を先に削除します。
+    removePhysicsObject(object.userData.physics);
+    object.geometry.dispose();
+    object.material.dispose();
+    object.removeFromParent();
+  }
 
   chunk.mesh.geometry.dispose();
   chunk.mesh.material.dispose();
