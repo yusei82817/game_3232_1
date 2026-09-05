@@ -1,18 +1,33 @@
 /*
- * マップ担当。
+ * WASTELAND // MAP
  *
- * 地形の見た目、地形コリジョン、水域、自然物をここでまとめて生成します。
- * game.jsは「ゲーム進行」、physics.jsは「物理API」、map.jsは「世界の地形」を担当します。
- *
- * 重要なのは、Three.js用の頂点・三角形とRapier用のコリジョンを同じデータから作ることです。
- * これにより、見た目の地面と実際に歩ける地面の位置を一致させます。
+ * 地形とマップ配置を担当するモジュールです。
+ * game.jsはゲーム進行、physics.jsは物理API、map.jsは世界の地形、
+ * water.jsは水域、create.jsは非生物のワールドオブジェクトを担当します。
  */
 
 import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js";
 import { createFixedTrimesh, createFixedBall } from "./physics.js";
+import { createWaterController } from "./water.js";
 
 function makeMaterial(color, roughness = 0.86) {
   return new THREE.MeshStandardMaterial({ color, roughness, metalness: 0.04 });
+}
+
+const CONFIG_INTERNAL = {
+  lakeDepth: 3.0,
+  waterLevel: -1.15,
+  lakeCenterX: -34,
+  lakeCenterZ: 26,
+  lakeRadiusX: 31,
+  lakeRadiusZ: 23
+};
+
+function waterShapeAt(x, z) {
+  const dx = (x - CONFIG_INTERNAL.lakeCenterX) / CONFIG_INTERNAL.lakeRadiusX;
+  const dz = (z - CONFIG_INTERNAL.lakeCenterZ) / CONFIG_INTERNAL.lakeRadiusZ;
+  const distance = Math.hypot(dx, dz);
+  return THREE.MathUtils.clamp((1.0 - distance) / 0.22, 0, 1);
 }
 
 function createTerrainHeightFunction() {
@@ -24,32 +39,12 @@ function createTerrainHeightFunction() {
       Math.cos((x - z) * 0.075) * 0.45 +
       Math.max(0, Math.sin(x * 0.018 + z * 0.031)) * 1.3 - 0.6;
 
-    const lake = getLakeShape(x, z);
+    const lake = waterShapeAt(x, z);
     if (lake <= 0) return natural;
 
     const smooth = lake * lake * (3 - 2 * lake);
     return natural - smooth * CONFIG_INTERNAL.lakeDepth;
   };
-}
-
-const CONFIG_INTERNAL = {
-  waterLevel: -1.15,
-  lakeCenterX: -34,
-  lakeCenterZ: 26,
-  lakeRadiusX: 31,
-  lakeRadiusZ: 23,
-  lakeDepth: 3.0,
-  waterSegments: 56,
-  waveAmplitude: 0.045,
-  waveLength: 0.32,
-  waveSpeed: 0.9
-};
-
-function getLakeShape(x, z) {
-  const dx = (x - CONFIG_INTERNAL.lakeCenterX) / CONFIG_INTERNAL.lakeRadiusX;
-  const dz = (z - CONFIG_INTERNAL.lakeCenterZ) / CONFIG_INTERNAL.lakeRadiusZ;
-  const distance = Math.hypot(dx, dz);
-  return THREE.MathUtils.clamp((1.0 - distance) / 0.22, 0, 1);
 }
 
 function buildTerrain(scene, config, terrainHeightAt) {
@@ -92,80 +87,10 @@ function buildTerrain(scene, config, terrainHeightAt) {
   mesh.receiveShadow = true;
   scene.add(mesh);
 
-  // 表示メッシュとまったく同じ頂点・三角形をRapierへ渡します。
-  // これを別計算にすると、見た目の地面と衝突面がずれてしまいます。
+  // 表示メッシュと同じ頂点・三角形をRapierへ渡します。
   createFixedTrimesh({ vertices: positions, indices });
 
   return { mesh, heights };
-}
-
-function buildWater(scene) {
-  const segments = CONFIG_INTERNAL.waterSegments;
-  const count = segments + 1;
-  const positions = new Float32Array(count * count * 3);
-  const indices = [];
-
-  for (let iz = 0; iz <= segments; iz++) {
-    for (let ix = 0; ix <= segments; ix++) {
-      const u = ix / segments * 2 - 1;
-      const v = iz / segments * 2 - 1;
-      const i = iz * count + ix;
-      positions[i * 3] = CONFIG_INTERNAL.lakeCenterX + u * CONFIG_INTERNAL.lakeRadiusX;
-      positions[i * 3 + 1] = CONFIG_INTERNAL.waterLevel;
-      positions[i * 3 + 2] = CONFIG_INTERNAL.lakeCenterZ + v * CONFIG_INTERNAL.lakeRadiusZ;
-    }
-  }
-
-  for (let iz = 0; iz < segments; iz++) {
-    for (let ix = 0; ix < segments; ix++) {
-      const a = iz * count + ix;
-      const b = a + 1;
-      const c = a + count;
-      const d = c + 1;
-      const cx = (positions[a * 3] + positions[d * 3]) * 0.5;
-      const cz = (positions[a * 3 + 2] + positions[d * 3 + 2]) * 0.5;
-      const shape = getLakeShape(cx, cz);
-      if (shape > 0) indices.push(a, c, b, b, c, d);
-    }
-  }
-
-  const geometry = new THREE.BufferGeometry();
-  geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
-  geometry.setIndex(indices);
-  geometry.computeVertexNormals();
-
-  const material = new THREE.MeshStandardMaterial({
-    color: 0x2f6f78,
-    transparent: true,
-    opacity: 0.72,
-    roughness: 0.18,
-    metalness: 0.12,
-    side: THREE.DoubleSide
-  });
-  const mesh = new THREE.Mesh(geometry, material);
-  mesh.receiveShadow = true;
-  scene.add(mesh);
-
-  mesh.userData.waterBasePositions = positions.slice();
-  mesh.userData.waterTime = 0;
-  mesh.userData.updateWater = (dt) => {
-    mesh.userData.waterTime += dt * CONFIG_INTERNAL.waveSpeed;
-    const time = mesh.userData.waterTime;
-    const position = geometry.attributes.position;
-    const base = mesh.userData.waterBasePositions;
-
-    for (let i = 0; i < position.count; i++) {
-      const x = base[i * 3];
-      const z = base[i * 3 + 2];
-      const wave =
-        Math.sin(x * CONFIG_INTERNAL.waveLength + time) * CONFIG_INTERNAL.waveAmplitude +
-        Math.cos(z * CONFIG_INTERNAL.waveLength * 0.83 - time * 0.8) * CONFIG_INTERNAL.waveAmplitude * 0.7;
-      position.setY(i, CONFIG_INTERNAL.waterLevel + wave);
-    }
-    position.needsUpdate = true;
-  };
-
-  return mesh;
 }
 
 function addRock(scene, terrainHeightAt, x, z, scale = 1) {
@@ -209,31 +134,19 @@ function buildNaturalObjects(scene, config, terrainHeightAt) {
 export function buildMap(scene, config) {
   const terrainHeightAt = createTerrainHeightFunction();
   const terrain = buildTerrain(scene, config, terrainHeightAt);
-  const waterMesh = buildWater(scene);
+  const waterState = createWaterController({ scene, terrainHeightAt });
   buildNaturalObjects(scene, config, terrainHeightAt);
 
   return {
     terrainHeightAt,
     terrainMesh: terrain.mesh,
     terrainHeights: terrain.heights,
-    waterMesh,
-    waterLevel: CONFIG_INTERNAL.waterLevel,
-    isWaterAt(x, z) {
-      const shape = getLakeShape(x, z);
-      return shape > 0 && terrainHeightAt(x, z) < CONFIG_INTERNAL.waterLevel + 0.12;
-    },
-    getWaterInfoAt(x, z) {
-      const shape = getLakeShape(x, z);
-      const active = shape > 0 && terrainHeightAt(x, z) < CONFIG_INTERNAL.waterLevel + 0.12;
-      return {
-        isWater: active,
-        surfaceY: CONFIG_INTERNAL.waterLevel,
-        depth: active ? Math.max(0, CONFIG_INTERNAL.waterLevel - terrainHeightAt(x, z)) : 0,
-        shoreFactor: shape
-      };
-    },
+    waterMesh: waterState.waterMesh,
+    waterLevel: waterState.waterLevel,
+    isWaterAt: waterState.isWaterAt,
+    getWaterInfoAt: waterState.getWaterInfoAt,
     update(dt) {
-      waterMesh.userData.updateWater(dt);
+      waterState.update(dt);
     }
   };
 }
