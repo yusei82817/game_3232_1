@@ -45,7 +45,9 @@ const CONFIG = {
   cameraPitchMax: 0.72,
   cameraCollisionPadding: 0.35,
 
-  dayLengthSeconds: 240,
+  // ゲーム内の1日を30分（1800秒）に設定します。
+  // 以前の240秒では昼夜の移り変わりが速すぎるため、探索向けにゆっくり進めます。
+  dayLengthSeconds: 1800,
   startTimeHours: 9.5,
   weatherCycleHours: 6,
   weatherTransitionSeconds: 8,
