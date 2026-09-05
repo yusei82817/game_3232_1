@@ -9,54 +9,41 @@ function loadTemplate() {
   if (!templatePromise) {
     const loader = new GLTFLoader();
     templatePromise = new Promise((resolve, reject) => {
-      loader.load(
-        MODEL_URL,
-        (gltf) => resolve(gltf),
-        undefined,
-        (error) => reject(error)
-      );
+      loader.load(MODEL_URL, resolve, undefined, reject);
     });
   }
   return templatePromise;
 }
 
-function setupModel(model, options) {
-  const scale = options.scale ?? 1;
-  model.scale.setScalar(scale);
-  model.position.set(0, 0, 0);
-  model.rotation.set(0, 0, 0);
-
-  model.traverse((object) => {
-    if (object.isMesh) {
+export function createHumanoidPlaceholder(options = {}) {
+  const group = new THREE.Group();
+  group.userData.phase = Math.random() * Math.PI * 2;
+  group.userData.isGLBHumanoid = true;
+  group.userData.loading = true;
+  loadTemplate().then((gltf) => {
+    const model = gltf.scene.clone(true);
+    const scale = options.scale ?? 1;
+    model.scale.setScalar(scale);
+    model.traverse((object) => {
+      if (!object.isMesh) return;
       object.castShadow = true;
       object.receiveShadow = true;
-      if (object.material) {
-        object.material = object.material.clone();
-      }
-    }
+    });
+    group.add(model);
+    group.userData.animations = gltf.animations;
+    group.userData.animationClips = gltf.animations;
+    group.userData.loading = false;
+  }).catch((error) => {
+    console.error("Failed to load humanoid GLB:", error);
+    group.userData.loading = false;
   });
-
-  model.userData.phase = Math.random() * Math.PI * 2;
-  model.userData.animations = options.animations ?? [];
-  model.userData.animationClips = options.animationClips ?? [];
-  model.userData.isGLBHumanoid = true;
-  return model;
-}
-
-export async function createHumanBody(options = {}) {
-  const gltf = await loadTemplate();
-  const model = gltf.scene.clone(true);
-  return setupModel(model, {
-    ...options,
-    animations: gltf.animations,
-    animationClips: gltf.animations
-  });
-}
-
-export function getHumanAnimations() {
-  return templatePromise?.then((gltf) => gltf.animations) ?? loadTemplate().then((gltf) => gltf.animations);
+  return group;
 }
 
 export function preloadHumanModel() {
   return loadTemplate();
+}
+
+export function getHumanAnimations() {
+  return loadTemplate().then((gltf) => gltf.animations);
 }
