@@ -18,8 +18,11 @@ import { createInputController } from "./input.js";
 import { createHumanoid } from "./entity.js";
 
 const CONFIG = {
-  worldSize: 180,
-  terrainSegments: 64,
+  // プレイ可能な地形の一辺を180mから360mへ拡大します。
+  // 地形の中心はそのままなので、スタート地点の周囲から遠方まで探索できます。
+  worldSize: 360,
+  // ワールドを広げても起伏が粗く見えすぎないよう、地形分割数も少し増やします。
+  terrainSegments: 96,
   playerRadius: 0.38,
   playerHalfHeight: 0.72,
   playerMass: 72,
@@ -44,6 +47,12 @@ const CONFIG = {
   cameraPitchMin: -0.38,
   cameraPitchMax: 0.72,
   cameraCollisionPadding: 0.35,
+
+  // 遠くまで見渡せる広い荒野に合わせて、描画範囲も延長します。
+  cameraFar: 520,
+  fogNear: 95,
+  fogFar: 440,
+  shadowDistance: 180,
 
   // ゲーム内の1日を30分（1800秒）に設定します。
   // 以前の240秒では昼夜の移り変わりが速すぎるため、探索向けにゆっくり進めます。
@@ -72,9 +81,9 @@ const clock = new THREE.Clock();
 function setupScene() {
   scene = new THREE.Scene();
   scene.background = new THREE.Color(0x9aa4a0);
-  scene.fog = new THREE.Fog(0x9aa4a0, 55, 180);
+  scene.fog = new THREE.Fog(0x9aa4a0, CONFIG.fogNear, CONFIG.fogFar);
 
-  camera = new THREE.PerspectiveCamera(62, innerWidth / innerHeight, 0.1, 300);
+  camera = new THREE.PerspectiveCamera(62, innerWidth / innerHeight, 0.1, CONFIG.cameraFar);
   camera.position.set(0, CONFIG.cameraHeight, CONFIG.cameraDistance);
 
   renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
@@ -91,11 +100,12 @@ function setupScene() {
   sunLight.castShadow = true;
   sunLight.shadow.mapSize.set(1536, 1536);
   sunLight.shadow.camera.near = 1;
-  sunLight.shadow.camera.far = 130;
-  sunLight.shadow.camera.left = -55;
-  sunLight.shadow.camera.right = 55;
-  sunLight.shadow.camera.top = 55;
-  sunLight.shadow.camera.bottom = -55;
+  // 広い地形でもプレイヤー周辺に自然な影を落とせるよう、影用カメラの範囲を拡張します。
+  sunLight.shadow.camera.far = CONFIG.shadowDistance;
+  sunLight.shadow.camera.left = -75;
+  sunLight.shadow.camera.right = 75;
+  sunLight.shadow.camera.top = 75;
+  sunLight.shadow.camera.bottom = -75;
   scene.add(sunLight);
   scene.add(sunLight.target);
   sunMesh = new THREE.Mesh(
