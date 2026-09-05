@@ -131,7 +131,8 @@ async function boot() {
 
     playerController = createPlayerController({
       scene, config: CONFIG, physicsWorld, terrainHeightAt, mapState, createModel: createHumanoid,
-      getCameraYaw: () => cameraController?.getYaw() ?? Math.PI, isDown: inputController.isDown
+      getCameraYaw: () => cameraController?.getYaw() ?? Math.PI, isDown: inputController.isDown,
+      consumeMousePress: inputController.consumeMousePress
     });
     await playerController.create();
 
