@@ -140,7 +140,6 @@ export function createPlayerController({
       : (running ? config.runSpeed : config.walkSpeed);
     const targetVX = move.x * targetSpeed;
     const targetVZ = move.z * targetSpeed;
-    const velocity = playerBody.linvel();
 
     const acceleration = inWater
       ? config.swimAcceleration
@@ -170,11 +169,26 @@ export function createPlayerController({
 
     applyWaterPhysics(dt, waterInfo);
 
-    // アニメーションにはこのフレームで計算された現在速度を渡します。
+    // 移動している方向へ胴体を滑らかに向けます。
+    // 物理Bodyそのものは回転させず、見た目のモデルだけを向けることで
+    // lockRotations()を使っているプレイヤーの物理姿勢を壊さないようにします。
     const currentVelocity = playerBody.linvel();
+    const horizontalSpeed = Math.hypot(currentVelocity.x, currentVelocity.z);
+    if (horizontalSpeed > 0.12) {
+      const targetYaw = Math.atan2(currentVelocity.x, currentVelocity.z);
+      const currentYaw = playerModel.rotation.y;
+      const yawDelta = Math.atan2(
+        Math.sin(targetYaw - currentYaw),
+        Math.cos(targetYaw - currentYaw)
+      );
+      const turnRate = inWater ? 7.0 : 10.0;
+      playerModel.rotation.y += yawDelta * Math.min(1, turnRate * dt);
+    }
+
+    // アニメーションにはこのフレームで計算された現在速度を渡します。
     animateHumanoid(
       playerModel,
-      Math.hypot(currentVelocity.x, currentVelocity.z),
+      horizontalSpeed,
       grounded,
       running,
       dt,
