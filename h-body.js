@@ -14,14 +14,16 @@ function makeMaterial(color, roughness = 0.86) {
 
 /**
  * 人間の頭部を作ります。
- * 顔パーツを頭の子にすることで、頭が動いても目・髪・口などが置き去りになりません。
+ * 顔パーツはすべてheadの子にします。モデルの正面は+Z側として統一します。
  */
 function createHead(skin, options) {
   const head = new THREE.Group();
   head.position.y = 2.03;
 
-  const headMesh = new THREE.SphereGeometry(0.29, 18, 14);
-  const face = new THREE.Mesh(headMesh, skin);
+  const face = new THREE.Mesh(
+    new THREE.SphereGeometry(0.29, 18, 14),
+    skin
+  );
   head.add(face);
 
   const hair = makeMaterial(options.hair ?? 0x25211f, 0.9);
@@ -29,84 +31,63 @@ function createHead(skin, options) {
   const eyeColor = makeMaterial(options.eye ?? 0x3b2a22, 0.4);
   const mouthMat = makeMaterial(0x4a2424, 0.75);
 
-  // 頭頂部から後頭部を覆う髪。球を完全に覆わず、顔側を開けます。
+  // 髪は頭頂部から後頭部を覆い、顔の正面（+Z）を開けます。
   const hairCap = new THREE.Mesh(
-    new THREE.SphereGeometry(0.302, 18, 12, 0, Math.PI * 2, 0, Math.PI * 0.58),
+    new THREE.SphereGeometry(0.302, 18, 12, 0, Math.PI * 2, 0, Math.PI * 0.60),
     hair
   );
+  hairCap.position.y = 0.025;
+  hairCap.position.z = -0.055;
   hairCap.rotation.x = Math.PI;
-  hairCap.position.z = 0.015;
-  hairCap.position.y = 0.015;
   head.add(hairCap);
 
-  // 前髪を小さな房として配置し、額の輪郭を作ります。
+  // 前髪は顔の上端（+Z側）に沿わせます。
   for (const x of [-0.14, 0, 0.14]) {
-    const bang = new THREE.Mesh(
-      new THREE.SphereGeometry(0.10, 10, 8),
-      hair
-    );
+    const bang = new THREE.Mesh(new THREE.SphereGeometry(0.10, 10, 8), hair);
     bang.scale.set(0.8, 1.15, 0.65);
-    bang.position.set(x, 0.20, -0.205);
+    bang.position.set(x, 0.20, 0.205);
     head.add(bang);
   }
 
-  // 左右の耳。
+  // 耳は頭の左右に配置します。
   for (const x of [-0.292, 0.292]) {
-    const ear = new THREE.Mesh(
-      new THREE.SphereGeometry(0.075, 10, 8),
-      skin
-    );
+    const ear = new THREE.Mesh(new THREE.SphereGeometry(0.075, 10, 8), skin);
     ear.scale.set(0.55, 1, 0.72);
     ear.position.set(x, 0.01, 0);
     head.add(ear);
   }
 
-  // 目。白目の前に瞳を置き、顔の向きが分かるようにします。
+  // 目は顔の正面（+Z）に置きます。これがキャラクターの顔の向きです。
   for (const x of [-0.105, 0.105]) {
-    const eye = new THREE.Mesh(
-      new THREE.SphereGeometry(0.068, 12, 8),
-      eyeWhite
-    );
+    const eye = new THREE.Mesh(new THREE.SphereGeometry(0.068, 12, 8), eyeWhite);
     eye.scale.set(1, 1.05, 0.38);
-    eye.position.set(x, 0.055, -0.265);
+    eye.position.set(x, 0.055, 0.265);
     head.add(eye);
 
-    const pupil = new THREE.Mesh(
-      new THREE.SphereGeometry(0.035, 10, 8),
-      eyeColor
-    );
+    const pupil = new THREE.Mesh(new THREE.SphereGeometry(0.035, 10, 8), eyeColor);
     pupil.scale.z = 0.25;
-    pupil.position.set(x, 0.05, -0.293);
+    pupil.position.set(x, 0.05, 0.293);
     head.add(pupil);
   }
 
-  // 眉。目の少し上に細いカプセルを置きます。
+  // 眉も顔の正面に固定します。
   for (const x of [-0.105, 0.105]) {
-    const brow = new THREE.Mesh(
-      new THREE.CapsuleGeometry(0.012, 0.075, 3, 6),
-      hair
-    );
+    const brow = new THREE.Mesh(new THREE.CapsuleGeometry(0.012, 0.075, 3, 6), hair);
     brow.rotation.z = x < 0 ? 0.12 : -0.12;
-    brow.position.set(x, 0.145, -0.285);
+    brow.position.set(x, 0.145, 0.285);
     head.add(brow);
   }
 
-  // 鼻は小さな球で立体感だけを付けます。
-  const nose = new THREE.Mesh(
-    new THREE.SphereGeometry(0.035, 8, 6),
-    skin
-  );
+  // 鼻は目より少し前へ出して立体感を付けます。
+  const nose = new THREE.Mesh(new THREE.SphereGeometry(0.035, 8, 6), skin);
   nose.scale.set(0.8, 0.9, 0.8);
-  nose.position.set(0, -0.015, -0.292);
+  nose.position.set(0, -0.015, 0.292);
   head.add(nose);
 
-  // 口は薄いカプセル。表情アニメーションを追加する場合もここを基準にできます。
-  const mouth = new THREE.Mesh(
-    new THREE.CapsuleGeometry(0.012, 0.075, 3, 6),
-    mouthMat
-  );
+  // 口も顔の正面へ置きます。
+  const mouth = new THREE.Mesh(new THREE.CapsuleGeometry(0.012, 0.075, 3, 6), mouthMat);
   mouth.rotation.z = Math.PI * 0.5;
-  mouth.position.set(0, -0.115, -0.278);
+  mouth.position.set(0, -0.115, 0.278);
   head.add(mouth);
 
   return head;
@@ -139,10 +120,7 @@ export function createHumanBody(options = {}) {
     hip.position.set(x, hipY, 0);
     group.add(hip);
 
-    const thigh = new THREE.Mesh(
-      new THREE.CapsuleGeometry(radius, thighLength, 4, 8),
-      pants
-    );
+    const thigh = new THREE.Mesh(new THREE.CapsuleGeometry(radius, thighLength, 4, 8), pants);
     thigh.position.y = -thighLength * 0.5;
     hip.add(thigh);
 
@@ -150,16 +128,10 @@ export function createHumanBody(options = {}) {
     knee.position.set(0, -thighLength, 0);
     hip.add(knee);
 
-    const kneeJoint = new THREE.Mesh(
-      new THREE.SphereGeometry(radius * 1.02, 8, 6),
-      pants
-    );
+    const kneeJoint = new THREE.Mesh(new THREE.SphereGeometry(radius * 1.02, 8, 6), pants);
     knee.add(kneeJoint);
 
-    const shin = new THREE.Mesh(
-      new THREE.CapsuleGeometry(radius * 0.78, shinLength, 4, 8),
-      pants
-    );
+    const shin = new THREE.Mesh(new THREE.CapsuleGeometry(radius * 0.78, shinLength, 4, 8), pants);
     shin.position.y = -shinLength * 0.5;
     knee.add(shin);
 
@@ -167,16 +139,10 @@ export function createHumanBody(options = {}) {
     ankle.position.set(0, -shinLength, 0);
     knee.add(ankle);
 
-    const ankleJoint = new THREE.Mesh(
-      new THREE.SphereGeometry(radius * 0.72, 8, 6),
-      skin
-    );
+    const ankleJoint = new THREE.Mesh(new THREE.SphereGeometry(radius * 0.72, 8, 6), skin);
     ankle.add(ankleJoint);
 
-    const foot = new THREE.Mesh(
-      new THREE.BoxGeometry(0.19, 0.12, 0.34),
-      shoe
-    );
+    const foot = new THREE.Mesh(new THREE.BoxGeometry(0.19, 0.12, 0.34), shoe);
     foot.position.set(0, -0.045, 0.08);
     ankle.add(foot);
 
@@ -188,10 +154,7 @@ export function createHumanBody(options = {}) {
     shoulder.position.set(x, shoulderY, 0);
     group.add(shoulder);
 
-    const upper = new THREE.Mesh(
-      new THREE.CapsuleGeometry(radius, upperLength, 4, 8),
-      upperMaterial
-    );
+    const upper = new THREE.Mesh(new THREE.CapsuleGeometry(radius, upperLength, 4, 8), upperMaterial);
     upper.position.y = -upperLength * 0.5;
     shoulder.add(upper);
 
@@ -199,16 +162,10 @@ export function createHumanBody(options = {}) {
     elbow.position.set(0, -upperLength, 0);
     shoulder.add(elbow);
 
-    const elbowJoint = new THREE.Mesh(
-      new THREE.SphereGeometry(radius * 1.02, 8, 6),
-      foreMaterial
-    );
+    const elbowJoint = new THREE.Mesh(new THREE.SphereGeometry(radius * 1.02, 8, 6), foreMaterial);
     elbow.add(elbowJoint);
 
-    const fore = new THREE.Mesh(
-      new THREE.CapsuleGeometry(radius * 0.9, foreLength, 4, 8),
-      foreMaterial
-    );
+    const fore = new THREE.Mesh(new THREE.CapsuleGeometry(radius * 0.9, foreLength, 4, 8), foreMaterial);
     fore.position.y = -foreLength * 0.5;
     elbow.add(fore);
 
