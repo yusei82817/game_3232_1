@@ -15,13 +15,13 @@ import {
   dampWaterFall,
   checkGrounded
 } from "./physics.js";
-import { animateHumanoid } from "./animation.js";
+import { animateHumanoid, triggerPunch } from "./animation.js";
 
 const tmpForward = new THREE.Vector3();
 const tmpRight = new THREE.Vector3();
 const tmpMove = new THREE.Vector3();
 
-export function createPlayerController({ scene, config, physicsWorld, terrainHeightAt, mapState, createModel, getCameraYaw, isDown }) {
+export function createPlayerController({ scene, config, physicsWorld, terrainHeightAt, mapState, createModel, getCameraYaw, isDown, consumeMousePress }) {
   let playerBody = null;
   let playerCollider = null;
   let playerModel = null;
@@ -94,6 +94,10 @@ export function createPlayerController({ scene, config, physicsWorld, terrainHei
 
   function update(dt) {
     if (!playerBody || !playerModel) return;
+
+    if (consumeMousePress?.(0)) {
+      triggerPunch(playerModel);
+    }
 
     const move = movementInput();
     const waterInfo = getWaterInfo();
