@@ -2,8 +2,8 @@
  * WASTELAND // FIELD TEST
  *
  * ゲーム全体の初期化と描画ループ、各システムの接続を担当します。
- * physics.jsは物理司令塔、map.jsはマップ、npc.jsはNPC、camera.jsはカメラ、
- * field.jsは時間・天候・環境、player.jsはプレイヤー、input.jsは入力を担当します。
+ * physics.jsは物理司令塔、map.jsはマップ、chunk.jsは巨大世界のストリーミング、
+ * npc.jsはNPC、camera.jsはカメラ、field.jsは時間・天候、player.jsはプレイヤーを担当します。
  */
 
 import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js";
@@ -18,11 +18,16 @@ import { createInputController } from "./input.js";
 import { createHumanoid } from "./entity.js";
 
 const CONFIG = {
-  // プレイ可能な地形の一辺を180mから360mへ拡大します。
-  // 地形の中心はそのままなので、スタート地点の周囲から遠方まで探索できます。
-  worldSize: 360,
-  // ワールドを広げても起伏が粗く見えすぎないよう、地形分割数も少し増やします。
-  terrainSegments: 96,
+  // 世界を固定サイズで作らず、60m四方のチャンクを必要な範囲だけ生成します。
+  // 理論上はチャンクを東西南北へ増やせるため、世界サイズに実質的な上限を設けません。
+  chunkSize: 60,
+  // 1チャンクあたりの地形分割数。60m / 32なので約1.9m間隔です。
+  chunkTerrainSegments: 32,
+  // 表示用は7×7チャンク。プレイヤーから最大約240m先まで地形を保持します。
+  chunkRenderRadius: 3,
+  // 物理用は3×3チャンク。プレイヤー周辺180m四方だけRapierへ登録します。
+  chunkPhysicsRadius: 1,
+
   playerRadius: 0.38,
   playerHalfHeight: 0.72,
   playerMass: 72,
@@ -48,14 +53,13 @@ const CONFIG = {
   cameraPitchMax: 0.72,
   cameraCollisionPadding: 0.35,
 
-  // 遠くまで見渡せる広い荒野に合わせて、描画範囲も延長します。
+  // チャンクを遠くまで表示するため、カメラとフォグの範囲も拡張します。
   cameraFar: 520,
   fogNear: 95,
   fogFar: 440,
   shadowDistance: 180,
 
   // ゲーム内の1日を30分（1800秒）に設定します。
-  // 以前の240秒では昼夜の移り変わりが速すぎるため、探索向けにゆっくり進めます。
   dayLengthSeconds: 1800,
   startTimeHours: 9.5,
   weatherCycleHours: 6,
@@ -161,10 +165,13 @@ function frame() {
   playerController?.update(dt);
   npcManager?.update(dt);
   fieldController?.update(dt);
-  mapState?.update(dt);
+
+  // プレイヤーの現在位置をチャンク管理へ渡し、周囲の世界をロード・アンロードします。
+  const playerPosition = playerController?.getBody()?.translation() ?? null;
+  mapState?.update(dt, playerPosition);
 
   // 物理の更新は必ずphysics.jsへ渡します。
-  // physics.jsがgravity・speed・touchを統括し、ここでは物理エンジンの直接操作をしません。
+  // physics.jsがgravity・speed・touchを統括し、ここでは物理エンジンを直接操作しません。
   stepPhysics();
 
   syncVisuals();
