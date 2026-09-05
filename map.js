@@ -9,6 +9,7 @@
 import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js";
 import { createFixedTrimesh, createFixedBall } from "./physics.js";
 import { createWaterController } from "./water.js";
+import { createRock } from "./create.js";
 
 function makeMaterial(color, roughness = 0.86) {
   return new THREE.MeshStandardMaterial({ color, roughness, metalness: 0.04 });
@@ -93,21 +94,6 @@ function buildTerrain(scene, config, terrainHeightAt) {
   return { mesh, heights };
 }
 
-function addRock(scene, terrainHeightAt, x, z, scale = 1) {
-  const y = terrainHeightAt(x, z) + 0.65 * scale;
-  const mesh = new THREE.Mesh(
-    new THREE.DodecahedronGeometry(1, 1),
-    makeMaterial(0x5f625e)
-  );
-  mesh.scale.set(1.25 * scale, 0.75 * scale, 0.95 * scale);
-  mesh.rotation.set(Math.random(), Math.random(), Math.random());
-  mesh.position.set(x, y, z);
-  mesh.castShadow = true;
-  mesh.receiveShadow = true;
-  scene.add(mesh);
-  createFixedBall({ x, y, z, radius: 0.95 * scale });
-}
-
 function buildNaturalObjects(scene, config, terrainHeightAt) {
   const rocks = [
     [-18, -12, 1.25], [15, -17, 0.9], [29, 7, 1.5], [-34, 18, 1.15],
@@ -117,7 +103,14 @@ function buildNaturalObjects(scene, config, terrainHeightAt) {
 
   for (const [x, z, scale] of rocks) {
     if (Math.hypot(x, z) < 7) continue;
-    addRock(scene, terrainHeightAt, x, z, scale);
+    createRock({
+      scene,
+      terrainHeightAt,
+      createCollider: createFixedBall,
+      x,
+      z,
+      scale
+    });
   }
 
   for (let i = 0; i < Math.min(28, Math.floor(config.worldSize / 5)); i++) {
@@ -127,7 +120,14 @@ function buildNaturalObjects(scene, config, terrainHeightAt) {
     const z = Math.sin(angle) * radius;
     const scale = 0.28 + (i % 4) * 0.09;
     if (Math.hypot(x, z) < 9) continue;
-    addRock(scene, terrainHeightAt, x, z, scale);
+    createRock({
+      scene,
+      terrainHeightAt,
+      createCollider: createFixedBall,
+      x,
+      z,
+      scale
+    });
   }
 }
 
