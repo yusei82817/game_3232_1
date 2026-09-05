@@ -14,8 +14,7 @@ function makeMaterial(color, roughness = 0.86) {
 /**
  * NPCとプレイヤーで共有する人型モデルを生成します。
  * 腕と脚は「上腕→肘→前腕」「太腿→膝→脛」の親子構造にします。
- * こうしておくと、上腕を動かしたときに前腕だけが置き去りにならず、
- * 肘を軸に自然な二関節の動きを作れます。
+ * こうしておくと、関節を動かしても上下のパーツが置き去りになりません。
  */
 export function createHumanoid(options = {}) {
   const group = new THREE.Group();
@@ -36,17 +35,40 @@ export function createHumanoid(options = {}) {
   head.position.y = 2.03;
   group.add(head);
 
-  function limb(radius, length, material, x, y) {
-    const pivot = new THREE.Group();
-    pivot.position.set(x, y, 0);
-    const mesh = new THREE.Mesh(new THREE.CapsuleGeometry(radius, length, 4, 8), material);
-    mesh.position.y = -length * 0.5;
-    pivot.add(mesh);
-    group.add(pivot);
-    return pivot;
+  // 単純な1本の脚ではなく、太腿→膝→脛の二関節構造にします。
+  function leg(radius, thighLength, shinLength, x, hipY) {
+    const hip = new THREE.Group();
+    hip.position.set(x, hipY, 0);
+    group.add(hip);
+
+    const thigh = new THREE.Mesh(
+      new THREE.CapsuleGeometry(radius, thighLength, 4, 8),
+      pants
+    );
+    thigh.position.y = -thighLength * 0.5;
+    hip.add(thigh);
+
+    const knee = new THREE.Group();
+    knee.position.set(0, -thighLength, 0);
+    hip.add(knee);
+
+    const kneeJoint = new THREE.Mesh(
+      new THREE.SphereGeometry(radius * 1.02, 8, 6),
+      pants
+    );
+    knee.add(kneeJoint);
+
+    const shin = new THREE.Mesh(
+      new THREE.CapsuleGeometry(radius * 0.78, shinLength, 4, 8),
+      pants
+    );
+    shin.position.y = -shinLength * 0.5;
+    knee.add(shin);
+
+    return { hip, knee };
   }
 
-  // 上腕の先端が肘になります。前腕は上腕とは別の子Pivotとして肘に接続します。
+  // 上腕→肘→前腕の親子構造。肘を独立した関節として扱います。
   function arm(radius, upperLength, foreLength, upperMaterial, foreMaterial, x, shoulderY) {
     const shoulder = new THREE.Group();
     shoulder.position.set(x, shoulderY, 0);
@@ -82,10 +104,8 @@ export function createHumanoid(options = {}) {
   const leftArm = arm(0.105, 0.42, 0.40, shirt, skin, -0.43, 1.48);
   const rightArm = arm(0.105, 0.42, 0.40, shirt, skin, 0.43, 1.48);
 
-  const thighL = limb(0.14, 0.48, pants, -0.19, 0.76);
-  const thighR = limb(0.14, 0.48, pants, 0.19, 0.76);
-  const shinL = limb(0.105, 0.52, pants, -0.19, 0.28);
-  const shinR = limb(0.105, 0.52, pants, 0.19, 0.28);
+  const leftLeg = leg(0.14, 0.48, 0.52, -0.19, 0.76);
+  const rightLeg = leg(0.14, 0.48, 0.52, 0.19, 0.76);
 
   const footL = new THREE.Mesh(new THREE.BoxGeometry(0.19, 0.12, 0.34), shoe);
   footL.position.set(-0.19, 0.05, 0.08);
@@ -94,14 +114,17 @@ export function createHumanoid(options = {}) {
   footR.position.x = 0.19;
   group.add(footR);
 
-  // animation.jsから直接操作するのは各関節Pivotです。
-  // foreArmはelbowの子なので、上腕と前腕の向きが同じでも必ず肘で連結されます。
+  // animation.jsから操作するのは各関節Pivotです。
+  // 脛は膝の子なので、太腿を動かしても膝から下が一緒についてきます。
   group.userData.limbs = {
     upperArmL: leftArm.shoulder,
     upperArmR: rightArm.shoulder,
     foreArmL: leftArm.elbow,
     foreArmR: rightArm.elbow,
-    thighL, thighR, shinL, shinR
+    thighL: leftLeg.hip,
+    thighR: rightLeg.hip,
+    shinL: leftLeg.knee,
+    shinR: rightLeg.knee
   };
   group.userData.phase = Math.random() * Math.PI * 2;
   return group;
