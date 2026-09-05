@@ -15,6 +15,7 @@ import { createPlayerController } from "./player.js";
 import { animateHumanoid } from "./animation.js";
 import { createInputController } from "./input.js";
 import { createHumanoid } from "./entity.js";
+import { createFishManager } from "./fish.js";
 
 const CONFIG = {
   chunkSize: 60, chunkTerrainSegments: 32, chunkRenderRadius: 3, chunkPhysicsRadius: 1,
@@ -28,12 +29,13 @@ const CONFIG = {
   dayLengthSeconds: 1800, startTimeHours: 9.5, weatherCycleHours: 6, weatherTransitionSeconds: 8, rainCount: 700,
   npcCount: 14, npcWalkSpeed: 1.7, npcThinkInterval: 0.35,
   chickenCount: 8, cowCount: 4, pigCount: 5, mobSpawnRadius: 14, mobThinkInterval: 1.2, mobFearDistance: 7.0,
+  fishCount: 12, fishSpawnRadius: 24, fishMinHeight: 3.5, fishMaxHeight: 10.0, fishSpeedMin: 0.8, fishSpeedMax: 1.8,
   sunIntensity: 3.0, ambientDayIntensity: 0.55, ambientNightIntensity: 0.12
 };
 
 let scene, camera, renderer, physicsWorld;
 let sunLight, sunMesh, hemiLight;
-let npcManager, mobManager, cameraController, fieldController, playerController;
+let npcManager, mobManager, fishManager, cameraController, fieldController, playerController;
 let terrainHeightAt, mapState;
 const inputController = createInputController();
 const clock = new THREE.Clock();
@@ -103,6 +105,7 @@ function frame() {
   playerController?.update(dt);
   npcManager?.update(dt);
   mobManager?.update(dt);
+  fishManager?.update(dt);
   fieldController?.update(dt);
   const playerPosition = playerController?.getBody()?.translation() ?? null;
   mapState?.update(dt, playerPosition);
@@ -152,6 +155,12 @@ async function boot() {
     mobManager.spawnMany("chicken", CONFIG.chickenCount, { x: initialPlayerPosition.x, z: initialPlayerPosition.z, radius: CONFIG.mobSpawnRadius });
     mobManager.spawnMany("cow", CONFIG.cowCount, { x: initialPlayerPosition.x, z: initialPlayerPosition.z, radius: CONFIG.mobSpawnRadius });
     mobManager.spawnMany("pig", CONFIG.pigCount, { x: initialPlayerPosition.x, z: initialPlayerPosition.z, radius: CONFIG.mobSpawnRadius });
+
+    fishManager = await createFishManager({
+      scene,
+      getPlayerPosition: () => playerController?.getBody()?.translation() ?? { x: 0, y: 0, z: 0 },
+      config: CONFIG
+    });
 
     window.addEventListener("resize", resize);
     syncVisuals();
