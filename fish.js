@@ -66,7 +66,7 @@ function createFishModel(gltf, scale) {
 export async function createFishManager({ scene, getPlayerPosition = () => ({ x: 0, y: 0, z: 0 }), config = {} }) {
   const gltf = await loadTemplate();
   const fish = [];
-  const count = config.fishCount ?? 12;
+  const count = config.fishCount ?? 30;
   const radius = config.fishSpawnRadius ?? 24;
   const minHeight = config.fishMinHeight ?? 3.5;
   const maxHeight = config.fishMaxHeight ?? 10.0;
