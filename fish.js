@@ -1,13 +1,10 @@
 /*
  * WASTELAND // FISH SYSTEM
- *
- * Fish by Quaternius のGLBを使った空中遊泳システムです。
- *
- * 魚は地面・水面の物理に縛らず、独立した遊泳空間を泳ぎます。
- * SkeletonUtils.clone() を使うため、複数の魚を生成してもスケルトンを共有しません。
+ * Fish by Quaternius のGLBを使った遊泳システムです。
  */
 
 import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js";
+import RAPIER from "https://cdn.jsdelivr.net/npm/@dimforge/rapier3d-compat@0.19.0/+esm";
 import { GLTFLoader } from "https://cdn.jsdelivr.net/npm/three@0.180.0/examples/jsm/loaders/GLTFLoader.js";
 import { clone as cloneSkeleton } from "https://cdn.jsdelivr.net/npm/three@0.180.0/examples/jsm/utils/SkeletonUtils.js";
 
@@ -17,9 +14,7 @@ let templatePromise = null;
 function loadTemplate() {
   if (!templatePromise) {
     const loader = new GLTFLoader();
-    templatePromise = new Promise((resolve, reject) => {
-      loader.load(MODEL_URL, resolve, undefined, reject);
-    });
+    templatePromise = new Promise((resolve, reject) => loader.load(MODEL_URL, resolve, undefined, reject));
   }
   return templatePromise;
 }
@@ -47,23 +42,25 @@ function createFishModel(gltf, scale) {
       object.receiveShadow = true;
     }
   });
-
   const clips = gltf.animations ?? [];
   const mixer = clips.length ? new THREE.AnimationMixer(model) : null;
   const swimClip = findClip(clips, ["swim", "swimming", "idle"]);
   let action = null;
-
   if (mixer && swimClip) {
     action = mixer.clipAction(swimClip);
     action.play();
   }
-
   model.userData.mixer = mixer;
   model.userData.action = action;
   return model;
 }
 
-export async function createFishManager({ scene, getPlayerPosition = () => ({ x: 0, y: 0, z: 0 }), config = {} }) {
+export async function createFishManager({
+  scene,
+  physicsWorld,
+  getPlayerPosition = () => ({ x: 0, y: 0, z: 0 }),
+  config = {}
+}) {
   const gltf = await loadTemplate();
   const fish = [];
   const count = config.fishCount ?? 30;
@@ -72,6 +69,7 @@ export async function createFishManager({ scene, getPlayerPosition = () => ({ x:
   const maxHeight = config.fishMaxHeight ?? 10.0;
   const speedMin = config.fishSpeedMin ?? 0.8;
   const speedMax = config.fishSpeedMax ?? 1.8;
+  const collisionRadius = config.fishCollisionRadius ?? 0.38;
   const random = Math.random;
 
   function spawnOne() {
@@ -88,8 +86,24 @@ export async function createFishManager({ scene, getPlayerPosition = () => ({ x:
     model.position.copy(position);
     scene.add(model);
 
+    let body = null;
+    let collider = null;
+    if (physicsWorld) {
+      body = physicsWorld.createRigidBody(
+        RAPIER.RigidBodyDesc.kinematicPositionBased().setTranslation(position.x, position.y, position.z)
+      );
+      collider = physicsWorld.createCollider(
+        RAPIER.ColliderDesc.ball(collisionRadius)
+          .setFriction(0.35)
+          .setRestitution(0.05),
+        body
+      );
+    }
+
     const fishState = {
       model,
+      body,
+      collider,
       velocity: new THREE.Vector3(),
       target: new THREE.Vector3(),
       speed: speedMin + random() * (speedMax - speedMin),
@@ -128,15 +142,17 @@ export async function createFishManager({ scene, getPlayerPosition = () => ({ x:
       chooseTarget(state, player);
       toTarget.subVectors(state.target, position);
     }
-
     if (toTarget.lengthSq() > 0.001) toTarget.normalize();
 
     const desiredVelocity = toTarget.multiplyScalar(state.speed);
     state.velocity.lerp(desiredVelocity, 1 - Math.exp(-state.turnRate * dt));
     position.addScaledVector(state.velocity, dt);
-
     state.phase += dt * state.bobSpeed;
     position.y += Math.sin(state.phase) * state.bobAmplitude * dt;
+
+    if (state.body) {
+      state.body.setNextKinematicTranslation({ x: position.x, y: position.y, z: position.z });
+    }
 
     if (state.velocity.lengthSq() > 0.01) {
       const direction = state.velocity.clone().normalize();
@@ -147,7 +163,6 @@ export async function createFishManager({ scene, getPlayerPosition = () => ({ x:
         ? THREE.MathUtils.damp(state.model.rotation.x, -targetPitch, 3.0, dt)
         : state.model.rotation.x + (-targetPitch - state.model.rotation.x) * (1 - Math.exp(-3.0 * dt));
     }
-
     state.model.rotation.z = Math.sin(state.phase * 1.7) * 0.025;
     state.model.userData.mixer?.update(dt);
   }
