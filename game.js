@@ -29,7 +29,8 @@ const CONFIG = {
   dayLengthSeconds: 1800, startTimeHours: 9.5, weatherCycleHours: 6, weatherTransitionSeconds: 8, rainCount: 700,
   npcCount: 14, npcWalkSpeed: 1.7, npcThinkInterval: 0.35,
   chickenCount: 8, cowCount: 4, pigCount: 5, mobSpawnRadius: 14, mobThinkInterval: 1.2, mobFearDistance: 7.0,
-  fishCount: 12, fishSpawnRadius: 24, fishMinHeight: 3.5, fishMaxHeight: 10.0, fishSpeedMin: 0.8, fishSpeedMax: 1.8,
+  fishCount: 30, fishSpawnRadius: 24, fishMinHeight: 3.5, fishMaxHeight: 10.0, fishSpeedMin: 0.8, fishSpeedMax: 1.8,
+  fishCollisionRadius: 0.38,
   sunIntensity: 3.0, ambientDayIntensity: 0.55, ambientNightIntensity: 0.12
 };
 
@@ -158,6 +159,7 @@ async function boot() {
 
     fishManager = await createFishManager({
       scene,
+      physicsWorld,
       getPlayerPosition: () => playerController?.getBody()?.translation() ?? { x: 0, y: 0, z: 0 },
       config: CONFIG
     });
